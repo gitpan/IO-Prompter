@@ -30,7 +30,7 @@ else {
 
 
 
-if (prompt "(ex)it, [y]up or (z)en", -keyletter) {
+if (prompt "(ex)it, [y]up or (z)en", -key) {
     is $_, 'y'  => 'Default keyletter retrieved';
 }
 else {

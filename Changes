@@ -27,3 +27,28 @@ Revision history for IO-Prompter
 
     * Added -keyletters option to extract guarantees and defaults
       from the prompt
+
+
+0.002000  Tue Apr 10 17:25:54 2012
+
+    * Fixed selection of menu items specified by non-single character
+      (Thanks Chris!)
+
+    * Tweaked varname in docs (thanks Salvatore)
+
+    * Other doc fixes
+
+    * Made default values echo when selected
+
+    * Fixed -default value handling on -menu prompts
+      (disabled constraint-checking on that case)
+
+    * Fixed -keyletters example (-guarantee regex was wrong)
+
+    * Allowed -key and -keys as abbreviations for -keyletters
+
+    * Added -style and -echostyle features
+
+    * Added: use IO::Prompter -argv
+
+    * Improved -argv prompting

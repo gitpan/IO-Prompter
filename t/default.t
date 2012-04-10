@@ -1,4 +1,3 @@
-#! /opt/local/bin/perl5.10.0
 use 5.010;
 use warnings;
 use Test::More 'no_plan';
@@ -9,6 +8,7 @@ local *ARGV;
 open *ARGV, '<', \<<END_INPUT or die $!;
 
 Non-default
+
 
 END_INPUT
 
@@ -32,3 +32,11 @@ if (prompt "Enter line 1", -dFOO ) {
 else {
     fail '-d default'; 
 }
+
+if (prompt "Enter line 1", -number, -menu=>[1..10], -default=>'foo' ) {
+    is $_, 'foo'  => '-menu default';
+}
+else {
+    fail '-menu non-default'; 
+}
+

@@ -1,4 +1,3 @@
-#! /opt/local/bin/perl5.10.0
 use 5.010;
 use warnings;
 use Test::More;
@@ -17,10 +16,13 @@ my %ok = (
     'Pure prompt'       => 0,
     'Assignment prompt' => 0,
     '$_ unaffected'     => 0,
+    'Dynamic echo'      => 0,
 );
 
 if (prompt -i, "\n\tEnter an integer (should echo stars): ",
-           -echo=>'*', -out=>\*STDERR) {
+                -echo=>'*',
+                -out=>\*STDERR
+) {
     $ok{'Pure prompt'} = m{ ^ \s* [+-]? \d++ \s* $ }x;
 }
 
@@ -29,6 +31,15 @@ if (my $input = prompt "\tEnter an integer (should echo nothing): ", -i, -_e, -o
     $ok{'Assignment prompt'} = $input =~ m{ ^ \s* [+-]? \d++ \s* $ }x;
     $ok{'$_ unaffected'} = $_ eq 'UNDERBAR';
 }
+
+if (prompt "\tEnter your name (SHouLD eCHo iN HoSTaGe CaSe): ",
+           -echo => sub{ /[aeiou]/i ? lc : uc },
+           -out=>\*STDERR
+) {
+    $ok{'Dynamic echo'} = 1;
+}
+
+
 
 for my $test (keys %ok) {
     ok $ok{$test} => $test;

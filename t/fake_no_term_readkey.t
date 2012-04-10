@@ -1,4 +1,3 @@
-#! /opt/local/bin/perl5.10.0
 use lib qw< slib >;
 use 5.010;
 use warnings;

@@ -1,4 +1,3 @@
-#! /opt/local/bin/perl5.10.0
 use 5.010;
 use warnings;
 use Test::More 'no_plan';
@@ -24,8 +23,8 @@ like $@, qr/prompt\(\): Invalid value for -timeout \(expected number of seconds\
     };
 
     my $input = 'text';
-    open my $fh, '<', \$input;
-    prompt "Enter line 1", -in=>$input;
+    open my $fh, '<', \$input or die $!;
+    prompt "Enter line 1", -in=>$fh;
     fail 'void context warning' if !$warned;
 }
 
@@ -37,8 +36,8 @@ like $@, qr/prompt\(\): Invalid value for -timeout \(expected number of seconds\
     };
 
     my $input = 'text';
-    open my $fh, '<', \$input;
-    prompt "Enter line 1", -in=>$input;
+    open my $fh, '<', \$input or die $!;
+    prompt "Enter line 1", -in=>$fh;
     ok !$warned => 'muffled void context warning';
 }
 
@@ -52,8 +51,8 @@ like $@, qr/prompt\(\): Invalid value for -timeout \(expected number of seconds\
     };
 
     my $input = 'text';
-    open my $fh, '<', \$input;
-    my $result = prompt "Enter line 1", -in=>$input, -zen;
+    open my $fh, '<', \$input or die $!;
+    my $result = prompt "Enter line 1", -in=>$fh, -zen;
     fail 'unknown option warning' if !$warned;
 }
 
@@ -66,7 +65,7 @@ like $@, qr/prompt\(\): Invalid value for -timeout \(expected number of seconds\
     my $input = 'text';
     open my $fh, '<', \$input;
     no warnings 'misc';
-    my $result = prompt "Enter line 1", -in=>$input, -foobar;
+    my $result = prompt "Enter line 1", -in=>$fh, -foobar;
     ok !$warned => 'muffled unknown option warning';
 }
 

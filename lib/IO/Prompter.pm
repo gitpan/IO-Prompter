@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.001001';
+our $VERSION = '0.002000';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -55,7 +55,18 @@ my %history_cache;
 # Export the prompt() sub...
 sub import {
     my (undef, $input_data) = @_;
-    if (defined $input_data) {
+    # Handle -argv requests...
+    if (defined $input_data && $input_data eq '-argv') {
+        scalar prompt(-argv);
+    }
+
+    # Handle lexical options...
+    elsif (ref $input_data eq 'ARRAY') {
+        _warn( misc => 'Lexical options not yet implemented' );
+    }
+
+    # Handler faked input specifications...
+    elsif (defined $input_data) {
         $fake_input = $input_data;
     }
 
@@ -77,6 +88,16 @@ sub prompt {
     # Work out where the prompts go, and where the input comes from...
     my $in_filehandle  = $opt_ref->{-in}  // _open_ARGV();
     my $out_filehandle = $opt_ref->{-out} // qualify_to_ref(select);
+    if (!ref $in_filehandle) {
+        open my $fh, '<', $in_filehandle
+            or _opt_err('Unacceptable', '-in', 'valid filehandle or filename');
+        $in_filehandle = $fh;
+    }
+    if (!ref $out_filehandle) {
+        open my $fh, '>', $out_filehandle
+            or _opt_err('Unacceptable', '-out', 'valid filehandle or filename');
+        $out_filehandle = $fh;
+    }
 
     # Track timeouts...
     my $in_pos = do { no warnings;  tell $in_filehandle } // 0;
@@ -86,7 +107,7 @@ sub prompt {
 
     # Work out how they're arriving and departing...
     my $outputter_ref = -t $in_filehandle && -t $out_filehandle
-                            ? _std_printer_to($out_filehandle)
+                            ? _std_printer_to($out_filehandle, $opt_ref)
                             : _null_printer()
                             ;
     my $inputter_ref = _generate_unbuffered_reader_from(
@@ -95,7 +116,7 @@ sub prompt {
 
     # Clear the screen if requested to...
     if ($opt_ref->{-wipe}) {
-        $outputter_ref->("\n" x 1000);
+        $outputter_ref->(-nostyle => "\n" x 1000);
     }
 
     # Handle menu structures...
@@ -109,13 +130,16 @@ sub prompt {
 
         MENU:
         while (1) {
+            # Track the current level...
+            $opt_ref->{-menu_curr_level} = $menu[-1]{value_for};
+
             # Show menu and retreive choice...
-            $outputter_ref->($menu[-1]{prompt});
+            $outputter_ref->(-style => $menu[-1]{prompt});
             my $tag = $inputter_ref->($menu[-1]{constraint});
 
             # Handle a failure by exiting the loop...
             last MENU if !defined $tag;
-            $tag =~ s{\A\s*(\S?).*}{$1}xms;
+            $tag =~ s{\A\s*(\S*).*}{$1}xms;
 
             # Handle <ESC> by moving up menu stack...
             if ($tag eq $MENU_ESC) {
@@ -125,7 +149,13 @@ sub prompt {
                 next MENU;
             }
 
-            # Retrieve value for selected tag and exit if not a nested menu...
+            # Handle defaults by selecting and ejecting...
+            if ($tag =~ /\A\n?\Z/ && exists $opt_ref->{-def}) {
+                $input = $tag;
+                last MENU;
+            }
+
+            # Otherwise, retrieve value for selected tag and exit if not a nested menu...
             $input = $menu[-1]{value_for}{$tag};
             last MENU if !ref $input;
 
@@ -141,7 +171,7 @@ sub prompt {
 
     # Otherwise, simply ask and ye shall receive...
     else {
-        $outputter_ref->($opt_ref->{-prompt});
+        $outputter_ref->(-style => $opt_ref->{-prompt});
         $input = $inputter_ref->();
     }
 
@@ -207,7 +237,11 @@ sub prompt {
           SCALAR { $input;                         }
           METHOD {
                     defaulted => sub { $defaulted  },
-                    timedout  => sub { $timedout   },
+                    timedout  => sub {
+                        return q{} if !$timedout;
+                        return "timed out after $opt_ref->{-timeout} second"
+                             . ($opt_ref->{-timeout} == 1 ? q{} : q{s});
+                    },
                  };
 }
 
@@ -257,6 +291,43 @@ for my $constraint (keys %STD_CONSTRAINT) {
         = sub { ! $implementation->(@_) };
 }
 
+# Special style specifications require decoding...
+
+sub _decode_echo {
+    my $style = shift;
+
+    # Not a special style...
+    return $style if ref $style || $style !~ m{/};
+
+    # A slash means yes/no echoes...
+    my ($yes, $no) = split m{/}, $style;
+    return sub{ /y/i ? $yes : $no };
+}
+
+sub _decode_echostyle {
+    my $style = shift;
+
+    # Not a special style...
+    return $style if ref $style || $style !~ m{/};
+
+    # A slash means yes/no styles...
+    my ($yes, $no) = split m{/}, $style;
+    return sub{ /y/i ? $yes : $no };
+}
+
+sub _decode_style {
+    # No special prompt styles (yet)...
+    return shift;
+}
+
+# Generate safe closure around active sub...
+sub _gen_wrapper_for {
+    my ($arg) = @_;
+    return ref $arg ne 'CODE' 
+           ? sub { $arg }
+           : sub { eval { for (shift) { no warnings; return $arg->($_) // $_ } } };
+}
+
 # Create recognizer...
 my $STD_CONSTRAINT
     = '^(?:' . join('|', reverse sort keys %STD_CONSTRAINT) . ')';
@@ -290,10 +361,15 @@ sub _standardize_constraint {
 # Convert args to prompt + options hash...
 sub _decode_args {
     my %option = (
-        -prompt   => undef,
-        -complete => $DEFAULT_COMPLETER,
-        -must     => {},
-        -history  => 'DEFAULT'
+        -prompt    => undef,
+        -complete  => $DEFAULT_COMPLETER,
+        -must      => {},
+        -history   => 'DEFAULT',
+        -style     => sub{ q{} },
+        -nostyle   => sub{ q{} },
+        -echostyle => sub{ q{} },
+        -echo      => sub { shift },
+        -return    => sub { "\n" },
     );
 
     DECODING:
@@ -366,11 +442,26 @@ sub _decode_args {
                     _opt_err('Missing', -fail, 'failure condition') if !@_;
                     $option{-fail} = shift @_;
                 }
-                when (/^-f(\S*)$/) {
-                    my $fail_value = $1;
-                    _opt_err('Missing', -fail, 'failure condition')
-                        if !length($fail_value);
-                    $option{-fail} = $1;
+
+                # Specify a file request...
+                when (/^-f(?:ilename)?$/) {
+                    $option{-must}{'0: be an existing file'} = sub { -e $_[0] };
+                    $option{-must}{'1: be readable'}         = sub { -r $_[0] };
+                    $option{-complete}                       = 'filename';
+                }
+
+                # Specify prompt echoing colour/style...
+                when (/^-style/) {
+                    _opt_err('Missing -style specification') if !@_;
+                    my $style = _decode_style(shift @_);
+                    $option{-style} = _gen_wrapper_for($style);
+                }
+
+                # Specify input colour/style...
+                when (/^-echostyle/) {
+                    _opt_err('Missing -echostyle specification') if !@_;
+                    my $style = _decode_echostyle(shift @_);
+                    $option{-echostyle} = _gen_wrapper_for($style);
                 }
 
 
@@ -501,7 +592,7 @@ sub _decode_args {
                     push @_, -guarantee => \@keys;
 
                 }
-                when (/^-keylet(?:ter)?(?:s)?/) {
+                when (/^-key(?:let(?:ter)?)(?:s)?/) {
                     push @_, '-keyletters_implement';
                 }
                 when (/^-k/) {
@@ -516,9 +607,7 @@ sub _decode_args {
                     _opt_err('Invalid', -must, 'hash reference')
                         if ref($must) ne 'HASH';
                     for my $errmsg (keys %{$must}) {
-                        my (undef, $constraint)
-                            = _standardize_constraint('must',$must->{$errmsg});
-                        $option{-must}{$errmsg} = $constraint;
+                        $option{-must}{$errmsg} = $must->{$errmsg};
                     }
                 }
 
@@ -552,18 +641,25 @@ sub _decode_args {
                     if ($flag eq '-echo' && !eval { require Term::ReadKey }) {
                         _warn( bareword => "Warning: next input will be in plaintext\n");
                     }
-                    $option{$flag} = @_ && $_[0] !~ /^-/ ? shift(@_)
-                                   : $flag eq '-echo'    ? q{}
-                                   :                       qq{\n};
+                    my $arg = @_ && $_[0] !~ /^-/ ? shift(@_)
+                            : $flag eq '-echo'    ? q{}
+                            :                       qq{\n};
+                    $option{$flag} = _gen_wrapper_for(_decode_echo($arg));
                 }
                 when (/^-e(.*)/) {
                     if (!eval { require Term::ReadKey }) {
                         _warn( bareword => "Warning: next input will be in plaintext\n");
                     }
-                    $option{-echo}   = $1;
+                    my $arg = $1;
+                    $option{-echo} = _gen_wrapper_for(_decode_echo($arg));
                 }
-                when (/^-r(.+)/) { $option{-return} = $1;   }
-                when (/^-r/)     { $option{-return} = "\n"; }
+                when (/^-r(.+)/) {
+                    my $arg = $1;
+                    $option{-return} = _gen_wrapper_for(_decode_echo($arg));
+                }
+                when (/^-r/) {
+                    $option{-return} = sub{ "\n" };
+                }
 
                 # Explicit prompt replaces implicit prompts...
                 when (/^-prompt$/) {
@@ -579,8 +675,9 @@ sub _decode_args {
                 # Menus inject a placeholder in the prompt string...
                 when (/^-menu$/) {
                     _opt_err('Missing', '-menu', 'menu specification') if !@_;
-                    $option{-menu} = ref $_[0] ? shift(@_) : \shift(@_);
-                    $option{-prompt} .= $MENU_MK;
+                    $option{-menu}         = ref $_[0] ? shift(@_) : \shift(@_);
+                    $option{-prompt}      .= $MENU_MK;
+                    $option{-def_nocheck}  = 1;
                 }
 
                 # Anything else of the form '-...' is a misspelt option...
@@ -604,17 +701,27 @@ sub _decode_args {
     }
 
     # Handle return magic on -single...
-    if (defined $option{-single} && length($option{-echo}//'echoself')) {
-        $option{-return} //= qq{\n};
+    if (defined $option{-single} && length($option{-echo}('X')//'echoself')) {
+        $option{-return} //= sub{ "\n" };
     }
 
     # Adjust prompt as necessary...
     if (!defined $option{-prompt}) {
         # Missing prompt defaults to simple prompt...
-        $option{-prompt}
-            = $option{-argv} ? "> $0 [enter command line args here]\r> $0 "
-            :                  '> '
-            ;
+        if ($option{-argv}) {
+            my $not_first;
+            $option{-complete} = 'filename';
+            $option{-prompt} = "> $0  [enter command line args here]\r> $0 ";
+            $option{-echo}   = sub{
+                my $char = shift;
+                $option{-prompt} = "> $0 ";  # Sneaky resetting to handle completions
+                return $char if $not_first++;
+                return "\r> $0                                \r> $0 $char";
+            }
+        }
+        else {
+            $option{-prompt} = '> ';
+        }
     }
     elsif ($option{-prompt} =~ m{ \S \z}xms) {
         # If prompt doesn't end in whitespace, make it so...
@@ -704,16 +811,22 @@ sub _verify_input_constraints {
         $failed = $opt_ref->{-prompt} . "(must be a number) ";
     }
 
+    # Sort and clean up -must list...
+    my $must_ref = $opt_ref->{-must} // {};
+    my @must_keys     = sort keys %{$must_ref};
+    my %clean_key_for = map { $_ => (/^\d+[.:]?\s*(.*)/s ? $1 : $_) } @must_keys;
+    my @must_kv_list  = map { $clean_key_for{$_} => $must_ref->{$_} } @must_keys;
+
     # Combine -yesno and -must constraints...
     my %constraint_for = (
         %{$extras//{}},
         %{$opt_ref->{-yesno}//{}},
-        %{$opt_ref->{-must}//{}},
+        @must_kv_list,
     );
     my @constraints = (
         keys %{$extras//{}},
         keys %{$opt_ref->{-yesno}//{}},
-        keys %{$opt_ref->{-must}//{}},
+        @clean_key_for{@must_keys},
     );
 
     # User-specified constraints...
@@ -739,7 +852,7 @@ sub _verify_input_constraints {
 
         # Redraw post-menu prompt with failure message appended...
         $failed =~ s{.*$MENU_MK}{}xms;
-        $outputter_ref->(_wipe_line(), $failed);
+        $outputter_ref->(-style => _wipe_line(), $failed);
 
         # Reset input collector...
         ${$input_ref}  = q{};
@@ -794,7 +907,7 @@ sub _generate_buffered_reader_from {
                     sleep 1;
                     for (split q{}, $local_fake_input) {
                         _simulate_typing();
-                        $outputter_ref->($opt_ref->{-echo} // $_);
+                        $outputter_ref->(-echostyle => $opt_ref->{-echo}($_));
                     }
                     readline $in_fh;
 
@@ -1092,7 +1205,7 @@ sub _generate_unbuffered_reader_from {
                             : q{};
 
                         # Update prompt with selected completion...
-                        $outputter_ref->(
+                        $outputter_ref->( -style =>
                             $list_display,
                             _wipe_line(),
                             $opt_ref->{-prompt}, $input
@@ -1112,8 +1225,8 @@ sub _generate_unbuffered_reader_from {
                     if ($faking) {
                         substr($local_fake_input,0,0,$erased);
                     }
-                    $outputter_ref->(
-                        map { $_ x (length($opt_ref->{-echo}//'X')) }
+                    $outputter_ref->( -nostyle =>
+                        map { $_ x (length($opt_ref->{-echo}($_)//'X')) }
                             "\b", ' ', "\b"
                     );
                     next INPUT;
@@ -1140,7 +1253,7 @@ sub _generate_unbuffered_reader_from {
                     if ($faking && length($local_fake_input)) {
                         for (split q{}, $local_fake_input) {
                             _simulate_typing();
-                            $outputter_ref->($opt_ref->{-echo} // $_);
+                            $outputter_ref->(-echostyle => $opt_ref->{-echo}($_));
                         }
                         $input .= $local_fake_input;
                     }
@@ -1154,8 +1267,26 @@ sub _generate_unbuffered_reader_from {
                         $opt_ref, $extra_constraints,
                     );
 
+                    # Echo a default value if appropriate...
+                    if ($input =~ m{\A\n?\Z}xms && defined $opt_ref->{-def}) {
+                        my $def_val = $opt_ref->{-def};
+
+                        # Try to find the key, for a menu...
+                        if (exists $opt_ref->{-menu_curr_level}) {
+                            for my $key ( keys %{$opt_ref->{-menu_curr_level}}) {
+                                if ($def_val ~~ $opt_ref->{-menu_curr_level}{$key}) {
+                                    $def_val = $key;
+                                    last;
+                                }
+                            }
+                        }
+
+                        # Echo it as if it had been typed...
+                        $outputter_ref->(-echostyle => $opt_ref->{-echo}($def_val));
+                    }
+
                     # Echo the return (or otherwise, as specified)...
-                    $outputter_ref->($opt_ref->{-return} // $next);
+                    $outputter_ref->(-echostyle => $opt_ref->{-return}($next));
 
                     # Clean up, and return the input...
                     Term::ReadKey::ReadMode('restore', $in_fh);
@@ -1186,7 +1317,7 @@ sub _generate_unbuffered_reader_from {
                     $input .= $next;
 
                     # Display the character (or whatever was specified)...
-                    $outputter_ref->($opt_ref->{-echo} // $next);
+                    $outputter_ref->(-echostyle => $opt_ref->{-echo}($next));
 
                     # Not verbatim after this...
                     $prev_was_verbatim = 0;
@@ -1213,12 +1344,13 @@ sub _generate_unbuffered_reader_from {
                 # Return failure if failed before input...
                 return undef if !defined $next && length($input) == 0;
 
-                # Otherwise return input, supplying a newline if necessary...
+                # Otherwise supply a final newline if necessary...
                 if ( $opt_ref->{-single}
                 &&   exists $opt_ref->{-return}
                 &&   $input ne "\n" ) {
-                    $outputter_ref->($opt_ref->{-return});
+                    $outputter_ref->(-echostyle => $opt_ref->{-return}(q{}));
                 }
+
                 return $input;
             }
         }
@@ -1286,15 +1418,96 @@ sub _build_menu {
     };
 }
 
+# Vocabulary that _stylize understands...
+my %synonyms = (
+    bold      => [qw<boldly strong heavy emphasis emphatic highlight highlighted fort forte>],
+    dark      => [qw<darkly dim deep>],
+    faint     => [qw<faintly light soft>],
+    underline => [qw<underlined underscore underscored italic italics>],
+    blink     => [qw<blinking flicker flickering flash flashing>],
+    reverse   => [qw<reversed inverse inverted>],
+    concealed => [qw<hidden blank invisible>],
+    bright_   => [qw< bright\s+ vivid\s+ >],
+    red       => [qw< scarlet vermilion crimson ruby cherry cerise cardinal carmine 
+                      burgundy claret chestnut copper garnet geranium russet
+                      salmon titian coral cochineal rose cinnamon ginger gules >],
+    yellow    => [qw< gold golden lemon cadmium daffodil mustard primrose tawny
+                      amber aureate canary champagne citrine citron cream goldenrod honey straw >],
+    green     => [qw< olive jade pea emerald lime chartreuse forest sage vert >],
+    cyan      => [qw< aqua aquamarine teal turquoise ultramarine >],
+    blue      => [qw< azure cerulean cobalt indigo navy sapphire >],
+    magenta   => [qw< amaranthine amethyst lavender lilac mauve mulberry orchid periwinkle
+                      plum pomegranate violet purple aubergine cyclamen fuchsia modena puce
+                      purpure >],
+    black     => [qw< charcoal ebon ebony jet obsidian onyx raven sable slate >],
+    white     => [qw< alabaster ash chalk ivory milk pearl silver argent >],
+);
+
+# Back-mapping to standard terms...
+my %normalize
+    = map { join('|', map { "$_\\b" } reverse sort @{$synonyms{$_}}) => $_ }
+          keys %synonyms;
+
+my $BACKGROUND = qr{
+     (\S+) \s+ (?: behind | beneath | below | under(?:neath)? )\b
+   | \b (?:upon|over|on) \s+ (?:an?)? \s+ (.*?) \s+ (?:background|bg|field) \b
+   | \b (?:upon\s+ | over\s+ | (?:(on|upon|over)\s+a\s+)?  (?:background|bg|field) \s+ (?:of\s+|in\s+)? | on\s+) (\S+)
+}ixms;
+
+# Convert a description to ANSI colour codes...
+sub _stylize {
+    my $spec = shift // q{};
+
+    # Handle arrays and hashes as args...
+    if (ref($spec) eq 'ARRAY') {
+        $spec = join q{ }, @{$spec};
+    }
+    elsif (ref($spec) eq 'HASH') {
+        $spec = join q{ }, keys %{$spec};
+    }
+
+    # Ignore punctuation...
+    $spec =~ s/[^\w\s]//g;
+
+    # Handle backgrounds...
+    $spec =~ s/$BACKGROUND/on_$+/g;
+
+    # Apply standard translations...
+    for my $pattern (keys %normalize) {
+        $spec =~ s{\b(on_|\b) $pattern}{($1//q{}).$normalize{$pattern}}geixms;
+    }
+
+    # Ignore anything unknown...
+    $spec =~ s{((?:on_)?(\S+))}{ exists $synonyms{$2} ? $1 : q{} }gxmse;
+
+    # Build ANSI terminal codes around text...
+    my $raw_text = join q{}, @_;
+    my ($prews, $text, $postws) = $raw_text =~ m{\A (\s*) (.*?) (\s*) \Z}xms;
+    my @style = split /\s+/, $spec;
+    return $prews
+         . ( @style ? Term::ANSIColor::colored(\@style, $text) : $text )
+         . $postws;
+}
+
 # Build a subroutine that prints printable chars to the specified filehandle...
 sub _std_printer_to {
-    my ($out_filehandle) = @_;
+    my ($out_filehandle, $opt_ref) = @_;
     no strict 'refs';
     _autoflush($out_filehandle);
-    return sub {
-        s{\e}{}gxms for @_;
-        print {$out_filehandle} @_;
-    };
+    if (eval { require Term::ANSIColor} ) {
+        return sub {
+            my $style = shift;
+            s{\e}{}gxms for @_;
+            print {$out_filehandle} _stylize($opt_ref->{$style}(@_), @_);
+        };
+    }
+    else {
+        return sub {
+            shift; # ...ignore style
+            s{\e}{}gxms for @_;
+            print {$out_filehandle} @_;
+        };
+    }
 }
 
 # Build a subroutine that prints to nowhere...
@@ -1312,14 +1525,14 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.001001
+This document describes IO::Prompter version 0.002000
 
 
 =head1 SYNOPSIS
 
     use IO::Prompter;
 
-    while (prompt -num 'Enter a number') {
+    while (prompt -num, 'Enter a number') {
         say "You entered: $_";
     }
 
@@ -1411,6 +1624,10 @@ or add a L<"no-op"|"Escaping otherwise magic options"> to them.
 
   * -e[STR] -echo=>STR         Echo string for each character typed
 
+            -echostyle=>SPEC   What colour/style to echo input in
+
+  * -f      -filename          Input should be name of a readable file
+
             -fail=>VALUE       Return failure if input smartmatches value
 
             -guar[antee]=>SPEC Only allow the specified words to be entered
@@ -1440,6 +1657,8 @@ or add a L<"no-op"|"Escaping otherwise magic options"> to them.
   * -s -1   -sing[le]          Return immediately after first key pressed
 
             -stdio             Use STDIN and STDOUT for prompting
+
+            -style=>SPEC       What colour/style to display the prompt text in
 
     -tNUM   -time[out]=>NUM    Specify a timeout on the input operation
 
@@ -1518,6 +1737,63 @@ with the input starting on the next line) just put two newlines at the end
 of the prompt. Only the very last one will be removed.
 
 
+=head3 Specifying how the prompt looks
+
+=over 4
+
+C<< -style  => I<SPECIFICATION> >>
+
+=back
+
+If the C<Term::ANSIColor> module is available, this option can be used
+to specify the colour and styling (e.g. bold, inverse, underlined, etc.)
+in which the prompt is displayed.
+
+You can can specify that styling as a single string:
+
+    prompt 'next:' -style=>'bold red on yellow';
+
+or an array of styles:
+
+    prompt 'next:' -style=>['bold', 'red', 'on_yellow'];
+
+The range of styles and colour names that the option understands is
+quite extensive. All of the following work as expected:
+
+    prompt 'next:' -style=>'bold red on yellow';
+
+    prompt 'next:' -style=>'strong crimson on gold';
+
+    prompt 'next:' -style=>'highlighted vermilion, background of cadmium';
+
+    prompt 'next:' -style=>'vivid russet over amber';
+
+    prompt 'next:' -style=>'gules fort on a field or';
+
+However, because C<Term::ANSIColor> maps everything back to the
+standard eight ANSI text colours and seven ANSI text styles, all of the
+above will also be rendered identically. See that module's
+documentation for details.
+
+If C<Term::ANSIColor> is not available, this option is silently ignored.
+
+Please bear in mind that up to 10% of people using your interface will
+have some form of colour vision impairment, so its always a good idea
+to differentiate information by style I<and> colour, rather than by colour
+alone. For example:
+
+    if ($dangerous_action) {
+        prompt 'Really proceed?', -style=>'bold red underlined';
+    }
+    else {
+        prompt 'Proceed?', -style=>'green';
+    }
+
+Also bear in mind that (even though C<-style> does support the C<'blink'>
+style) up to 99% of people using your interface will have Flashing Text
+Tolerance Deficiency. Just say "no".
+
+
 =head3 Specifying where to prompt
 
 =over 4
@@ -1581,6 +1857,12 @@ object returned by C<prompt()>:
         ...
     }
 
+If a time-out occurred, the return value of C<timedout()> is a string
+describing the timeout, such as:
+
+    "timed out after 60 seconds"
+
+
 =head3 Providing a menu of responses
 
 =over
@@ -1597,7 +1879,7 @@ an array, hash, or string, or else as a literal string.
 
 If the menu is specified in a hash, C<prompt()> displays the keys of the
 hash, sorted alphabetically, and with each alternative marked with a
-single alphabetic character.
+single alphabetic character (its "selector key").
 
 For example, given:
 
@@ -1613,14 +1895,14 @@ C<prompt()> will display:
         c. transcend
     > _
 
-It will then only permit the user to enter a valid selection (in the
+It will then only permit the user to enter a valid selector key (in the
 previous example: 'a', 'b', or 'c'). Once one of the alternatives is
 selected, C<prompt()> will return the corresponding value from the hash
 (0, 1, or -1, respectively, in this case).
 
-Note that the use of alphabetics as selectors inherently limits the
-number of usable menu items to 52. See L<"Numeric menus"> for a way
-to overcome this limitation.
+Note that the use of alphabetics as selector keys inherently limits the
+number of usable menu items to 52. See L<"Numeric menus"> for a way to
+overcome this limitation.
 
 A menu is treated like a special kind of prompt, so that any
 other prompt strings in the C<prompt()> call will appear either before or
@@ -1633,8 +1915,8 @@ If an array is used to specify the choices:
            -menu=>[ 'live free', 'die', 'transcend' ],
            '>';
 
-each array element is displayed (in the original array order) with a
-selector character:
+then each array element is displayed (in the original array order) with
+a selector key:
 
     Choose...
         a. live free
@@ -1662,10 +1944,9 @@ select a filename:
 
 =head4 Numbered menus
 
-As the previous examples indicate, menu items are usually given a unique
-alphabetic character by which they may be selected.
-
-However, if the C<-number> or C<-integer> option is specified as well:
+As the previous examples indicate, each menu item is given a unique
+alphabetic selector key. However, if the C<-number> or C<-integer>
+option is specified as well:
 
     prompt 'Choose...',
            -number,
@@ -1673,7 +1954,7 @@ However, if the C<-number> or C<-integer> option is specified as well:
            '>';
 
 C<prompt()> will number each menu item instead, using consecutive integers
-as the selectors:
+as the selector keys:
 
     Choose...
         1. die
@@ -1792,7 +2073,7 @@ C<< -comp[lete] => I<SPECIFICATION> >>
 When this option is specified, the C<prompt()> subroutine will complete
 input using the specified collection of strings. By default, when
 completion is active, word completion is requested using the C<< <TAB> >>
-key, but this can be changed by setting the C<$COMPLETE_KEY>
+key, but this can be changed by setting the C<$IO_PROMPTER_COMPLETE_KEY>
 environment variable. Once completion has been initiated, you can use
 the completion key or else C<< <CTRL-N> >> to advance to the next completion
 candidate. You can also use C<< <CTRL-P> >> to back up to the previous
@@ -1989,7 +2270,7 @@ C<< -dI<STRING> >>
 
 If a default value is specified, that value will be returned if the user
 enters an empty string at the prompt (i.e. if they just hit
-C<< <ENTER> >> immediately) or if the input operation times out under
+C<< <ENTER>/<RETURN> >> immediately) or if the input operation times out under
 L<the C<timeout> option|"Specifying how long to wait for input">.
 
 Note that the default value is not added to the prompt, unless you
@@ -2012,6 +2293,13 @@ any default value must also satisfy all the constraints you specify,
 unless you use the C<-DEFAULT> form, which skips constraint checking
 when the default value is selected.
 
+If you use the L<< C<-menu> option|"Providing a menu of responses" >>,
+the specified default value will be returned immediately C<< <ENTER>/<RETURN> >> is
+pressed, regardless of the depth you are within the menu. Note that the
+default value specifies the value to be returned, not the selector key
+to be entered. The default value does not even have to be one of the
+menu choices.
+
 
 =head3 Specifying what to echo on input
 
@@ -2029,15 +2317,38 @@ would be used to shroud a password entry, like so:
 
     # Enter password silently:
     my $passwd
-        = prompt -echo=>"";
+        = prompt 'Password:', -echo=>"";
 
     # Echo password showing only asterisks:
     my $passwd
-        = prompt -echo=>"*";
+        = prompt 'Password:', -echo=>"*";
 
 Note that this option is only available when the Term::ReadKey module
 is installed. If it is used when that module is not available, a warning
 will be issued.
+
+
+=head4 Specifying how to echo on input
+
+C<< -echostyle => I<SPECIFICATION> >>
+
+The C<-echostyle> option works for the text the user types in
+the same way that the C<-style> option works for the prompt. 
+That is, you can specify the style and colour in which the user's
+input will be rendered like so:
+
+    # Echo password showing only black asterisks on a red background:
+    my $passwd
+        = prompt 'Password:', -echo=>"*", -echostyle=>'black on red';
+
+Note that C<-echostyle> is completely independent of C<-echo>:
+
+    # Echo user's name input in bold white:
+    my $passwd
+        = prompt 'Name:', -echostyle=>'bold white';
+
+The C<-echostyle> option requires C<Term::ANSIColor>, and will
+be silently ignored if that module is not available.
 
 
 =head3 Specifying when input should fail
@@ -2050,10 +2361,10 @@ C<< -fI<STRING> >>
 
 =back
 
-If this option is specified before the function returns, the final input
-value is compared with the associated string or value, by smartmatching.
-If the two match, C<prompt()> returns a failure value. This means that
-instead of writing:
+If this option is specified, the final input value is compared with the
+associated string or value, by smartmatching just before the call to
+C<prompt()> returns. If the two match, C<prompt()> returns a failure
+value. This means that instead of writing:
 
     while (my $cmd = prompt '>') {
         last if $cmd eq 'quit';
@@ -2119,7 +2430,7 @@ effect, the user can usually autocomplete the acceptable inputs.
 Note, however, that C<-guarantee> can only reject (or autocomplete)
 input as it is typed if the Term::ReadKey module is available. If that
 module cannot be loaded, C<-guarantee> only applies its test after the
-C<< <ENTER> >> key is pressed, and there will be no autocompletion
+C<< <ENTER>/<RETURN> >> key is pressed, and there will be no autocompletion
 available.
 
 =head4 Constraining input to numbers
@@ -2160,15 +2471,15 @@ listed below. If you want a scalar value as a constraint, use a regex or
 array reference instead:
 
     # Wrong...
-    $answer = prompt "What's the unltimate answer?",
+    $answer = prompt "What's the ultimate answer?",
                       -integer => 42;
 
     # Use this instead...
-    $answer = prompt "What's the unltimate answer?",
+    $answer = prompt "What's the ultimate answer?",
                      -integer => qr/^42$/;
 
     # Or this...
-    $answer = prompt "What's the unltimate answer?",
+    $answer = prompt "What's the ultimate answer?",
                      -integer => [42];
 
 
@@ -2207,13 +2518,38 @@ For example:
     $step_value = prompt 'Next step:', -integer => 'even nonzero';
 
 
+=head4 Constraining input to filenames
+
+=over 4
+
+=item C<< -f >>
+
+=item C<< -filename >>
+
+=back
+
+You can tell C<prompt()> to accept only valid filenames, using the
+C<-filename> option (or its shortcut: C<-f>).
+
+This option is equivalent to the options:
+
+    -must => {
+        'File must exist'       => sub { -e },
+        'File must be readable' => sub { -r },
+    },
+    -complete => 'filename',
+
+In other words C<-filename> requires C<prompt()> to accept only the name
+of an existing, readable file, and it also activates filename completion.
+
+
 =head4 Constraining input to "keyletters"
 
 =over
 
 =item C<< -k >>
 
-=item C<< -keylet[ter][s] >>
+=item C<< -key[let[ter]][s] >>
 
 =back
 
@@ -2231,7 +2567,7 @@ which is specified by keying a unique letter, like so:
 This can be cleaned up (very slightly) by using a guarantee:
 
     given (prompt '[S]ave, (R)evert, or (D)iscard:', -default=>'S',
-                  -guarantee=>qr/SRD/i
+                  -guarantee=>qr/[SRD]/i
     ) {
         when (/R/i) { revert_file()  }
         when (/D/i) { discard_file() }
@@ -2267,7 +2603,7 @@ serious or irreversible consequences.
 
 A common idiom with key letters is to use the C<-single> option as well,
 so that pressing any key letter immediately completes the input, without
-the user having to also press C<ENTER>:
+the user having to also press C<< <ENTER>/<RETURN> >>:
 
     given (prompt -k1, '[S]ave, (R)evert, or (D)iscard:') {
         when (/R/i) { revert_file()  }
@@ -2337,12 +2673,12 @@ guaranteed that the input meets all the specified conditions.
 For example, suppose the user is required to enter a positive odd prime
 number less than 100. You could enforce that with:
 
-    my $opnlt30 = prompt 'Enter your guess:'
-                         -integer,
-                         -must => { 'be odd'                 => 'odd',
-                                    'be in range'            => [1..100],
-                                    'It must also be prime:' => \&isprime,
-                                  };
+    my $opnlt100 = prompt 'Enter your guess:',
+                          -integer,
+                          -must => { 'be odd'                 => 'odd',
+                                     'be in range'            => [1..100],
+                                     'It must also be prime:' => \&isprime,
+                                   };
 
 Note that, if the error message begins with anything except an uppercase
 character, the prompt is reissued followed by the error message in
@@ -2373,7 +2709,7 @@ after they are entered.
 
 =back
 
-When C<< <ENTER> >> is pressed, C<prompt()> usually echoes a carriage return.
+When C<< <ENTER>/<RETURN> >> is pressed, C<prompt()> usually echoes a carriage return.
 However, if this option is given, C<prompt()> echoes the specified string
 instead. If the string is omitted, it defaults to C<"\n">.
 
@@ -2388,7 +2724,7 @@ would prompt for something like this:
 
     Calculate: 2*3+4^5_
 
-and when the C<< <ENTER> >> keys is pressed, respond with:
+and when the C<< <ENTER>/<RETURN> >> key is pressed, respond with:
 
     Calculate: 2*3+4^5 = 1030
     Calculate: _
@@ -2396,7 +2732,7 @@ and when the C<< <ENTER> >> keys is pressed, respond with:
 The string specified with C<-return> is also automatically echoed if the
 L<< C<-single> option|"Single-character input" >> is used. So if you
 don't want the automatic carriage return that C<-single> mode supplies,
-specify C<-return=>"">.
+specify C<< -return=>"" >>.
 
 
 =head3 Single-character input
@@ -2412,7 +2748,7 @@ specify C<-return=>"">.
 =back
 
 This option causes C<prompt()> to return immediately once any single
-character is input. The user does not have to push the C<< <ENTER> >>
+character is input. The user does not have to push the C<< <ENTER>/<RETURN> >>
 key to complete the input operation. C<-single> mode input is only
 available if the Term::ReadKey module can be loaded.
 
@@ -2542,7 +2878,7 @@ actual first call will wipe the screen.
 =back
 
 This option invokes a special mode that can be used to confirm (or deny)
-something. If one of these options is specified C<prompt> still
+something. If one of these options is specified, C<prompt> still
 returns the user's input, but the success or failure of the object returned
 now depends on what the user types in.
 
@@ -2554,7 +2890,7 @@ except C<'y'> is treated as a "no" and a false value is returned.
 
 If the option is capitalized (C<-Y> or C<-YN>), the first letter of the
 input must be likewise a capital (this is a handy means of slowing down
-automatic unthinking "C<y>...oh no!" responses to potentially serious
+automatic unthinking C<y>..."Oh no!" responses to potentially serious
 decisions).
 
 This option is most often used in conjunction with the C<-single> option, like
@@ -2563,7 +2899,7 @@ so:
     $continue = prompt("Continue? ", -yn1);
 
 so that the user can just hit C<y> or C<n> to continue, without having to hit
-C<< <ENTER> >> as well.
+C<< <ENTER>/<RETURN> >> as well.
 
 
 =head3 Bundling short-form options
@@ -2579,7 +2915,7 @@ you could just write:
 
 This often does I<not> improve readability (as the preceding example
 demonstrates), but is handy for common usages such as C<-y1> ("ask for
-confirmation, don't require an C<< <ENTER> >>) or C<-vl> ("Return a
+confirmation, don't require an C<< <ENTER>/<RETURN> >>) or C<-vl> ("Return a
 verbatim and unchomped string").
 
 
@@ -2591,7 +2927,7 @@ C<< -_ >>
 
 =back
 
-The C<-_> option exists only to be an explicit no-op. It allows you to'
+The C<-_> option exists only to be an explicit no-op. It allows you to
 specify short-form options that would otherwise be interpreted as Perl
 file operators or other special constructs, simply by prepending or
 appending a C<_> to them. For example:
@@ -2680,9 +3016,9 @@ rather the next character from the specified input. The effect is that
 you can just type on the keyboard at random, but have the correct input
 appear. This greatly increases the convincingness of the simulation.
 
-If at any point, you hit C<< <ENTER> >> on the keyboard, C<prompt()>
+If at any point, you hit C<< <ENTER>/<RETURN> >> on the keyboard, C<prompt()>
 finishes typing in the input for you (using a realistic typing speed),
-and returns the input string. So you can also just hit C<< <ENTER> >>
+and returns the input string. So you can also just hit C<< <ENTER>/<RETURN> >>
 when the prompt first appears, to have the entire line of input typed
 for you.
 
@@ -2694,7 +3030,7 @@ throws away the current line of simulated input, and allows you to
 All these keyboard behaviours require the Term::ReadKey module to be
 available. If it isn't, C<prompt()> falls back on a simpler simulation,
 where it just autotypes each entire line for you and pauses at the
-end of the line, waiting for you to hit C<< <ENTER> >> manually.
+end of the line, waiting for you to hit C<< <ENTER>/<RETURN> >> manually.
 
 Note that any line of the simulated input that begins with
 a <CTRL-D> or <CTRL-Z> is treated as an input failure (just as
@@ -2709,94 +3045,109 @@ appropriate category.
 
 =item C<< prompt(): Can't open *ARGV: %s >>
 
-(F)  By default, C<prompt()> attempts to read input from the C<*ARGV>
-     filehandle. However, it failed to open that filehandle.
-     The reason is specified at the end of the message.
+(F)  By default, C<prompt()> attempts to read input from
+     the C<*ARGV> filehandle. However, it failed to open
+     that filehandle. The reason is specified at the end of
+     the message.
 
 
 =item C<< prompt(): Missing value for %s (expected %s) >>
 
-(F)  A named option the requires an argument was specified, but no argument
-     was provided after the option. See L<"Summary of options">.
+(F)  A named option that requires an argument was specified,
+     but no argument was provided after the option. See
+     L<"Summary of options">.
 
 
 =item C<< prompt(): Invalid value for %s (expected %s) >>
 
-(F)  The named option specified expects an particular type of argument,
-     but found one of an incompatible type instead.
-     See L<"Summary of options">.
+(F)  The named option specified expects an particular type
+     of argument, but found one of an incompatible type
+     instead. See L<"Summary of options">.
 
 
 =item C<< prompt(): Unknown option %s ignored >>
 
-(W misc)  C<prompt()> was passed a string starting with a hyphen, but
-          could not parse as a valid option. The option may have been
-          misspelt.  Alternatively, if the string was supposed
-          to be (part of) the prompt, it will be necessary to use
-          L<the C<-prompt> option|"Specifying what to prompt"> to specify it.
+(W misc)  C<prompt()> was passed a string starting with
+          a hyphen, but could not parse that string as a
+          valid option. The option may have been misspelt.
+          Alternatively, if the string was supposed to be
+          (part of) the prompt, it will be necessary to use
+          L<the C<-prompt> option|"Specifying what to
+          prompt"> to specify it.
 
 
 =item C<< prompt(): Unexpected argument (% ref) ignored >>
 
-(W reserved)  C<prompt()> was passed a reference to an array or
-              hash or subroutine in a position where an option flag
-              or a prompt string was expected. This may indicate that
-              a string variable in the argument list didn't contain
-              what was expected, or a reference variable was not
-              properly dereferenced. Alternatively, the argument may
-              have been intended as the argument to an option, but
-              has become separated from it somehow, or perhaps the
-              option was deleted without removing the argument as well.
+(W reserved)  C<prompt()> was passed a reference to
+              an array or hash or subroutine in a position
+              where an option flag or a prompt string was
+              expected. This may indicate that a string
+              variable in the argument list didn't contain
+              what was expected, or a reference variable was
+              not properly dereferenced. Alternatively, the
+              argument may have been intended as the
+              argument to an option, but has become
+              separated from it somehow, or perhaps the
+              option was deleted without removing the
+              argument as well.
 
 
 =item C<< Useless use of prompt() in void context >>
 
-(W void)  C<prompt()> was called but its return value was not stored or
-          used in any way. Since the subroutine has no side effects in void
-          context, calling it this way achieves nothing. Either make use of
-          the return value directly or, if the usage is deliberate, put
-          a C<scalar> in front of the call to remove the void context.
+(W void)  C<prompt()> was called but its return value was
+          not stored or used in any way. Since the
+          subroutine has no side effects in void context,
+          calling it this way achieves nothing. Either make
+          use of the return value directly or, if the usage
+          is deliberate, put a C<scalar> in front of the
+          call to remove the void context.
 
 
 =item C<< prompt(): -default value does not satisfy -must constraints >>
 
-(W misc)  The C<-must> flag was used to specify one or more input constraints.
-          The C<-default> flag was also specified. Unfortunately, the
-          default value provided did not satisfy the requirements
-          specified by the C<-must> flag. The call to C<prompt()> will
-          still go ahead (after issuing the warning), but the default
-          value will never be returned, since the constraint check will
-          reject it. It is probably better simply to include the default
-          value in the list of constraints.
+(W misc)  The C<-must> flag was used to specify one or more
+          input constraints. The C<-default> flag was also
+          specified. Unfortunately, the default value
+          provided did not satisfy the requirements
+          specified by the C<-must> flag. The call to
+          C<prompt()> will still go ahead (after issuing the
+          warning), but the default value will never be
+          returned, since the constraint check will reject
+          it. It is probably better simply to include the
+          default value in the list of constraints.
 
 
 =item C<< prompt(): -keyletters found too many defaults >>
 
-(W ambiguous)  The C<-keyletters> option was specified, but analysis of
-               the prompt revealed two or more character sequences
-               enclosed in square brackets. Since such sequences are
-               taken to indicate a default value, having two or more
-               makes the default ambiguous. The prompt should be
-               rewritten with no more than one set of square brackets.
+(W ambiguous)  The C<-keyletters> option was specified,
+               but analysis of the prompt revealed two or
+               more character sequences enclosed in square
+               brackets. Since such sequences are taken to
+               indicate a default value, having two or more
+               makes the default ambiguous. The prompt
+               should be rewritten with no more than one set
+               of square brackets.
 
 
 =item C<< Warning: next input will be in plaintext >>
 
-(W bareword)  The C<prompt()> subroutine was called with the C<-echo>
-              flag, but the Term::ReadKey module was not available to
-              implement this feature. The input will proceed as normal,
-              but this warning is issued to ensure that the user doesn't
-              type in something secret, expecting it to remain hidden,
-              which it won't.
+(W bareword)  The C<prompt()> subroutine was called with
+              the C<-echo> flag, but the Term::ReadKey
+              module was not available to implement this
+              feature. The input will proceed as normal, but
+              this warning is issued to ensure that the user
+              doesn't type in something secret, expecting it
+              to remain hidden, which it won't.
 
 
 =item C<< prompt(): Too many menu items. Ignoring the final %d >>
 
-(W misc)  A C<-menu> was specified with more than 52 choices. Because,
-          by default, menus use upper and lower-case alphabetic
-          characters as their selectors, there were no available
-          selectors for the extra items after the first 52. Either
-          reduce the number of choices to 52 or less, or else add the
+(W misc)  A C<-menu> was specified with more than 52 choices.
+          Because, by default, menus use upper and lower-
+          case alphabetic characters as their selectors,
+          there were no available selectors for the extra
+          items after the first 52. Either reduce the number
+          of choices to 52 or less, or else add the
           C<-number> option to use numeric selectors instead.
 
 =back
@@ -2851,7 +3202,7 @@ None reported.
 
 =head1 BUGS AND LIMITATIONS
 
-No bugs have been reported.
+No unresolved bugs have been reported.
 
 Please report any bugs or feature requests to
 C<bug-io-prompter@rt.cpan.org>, or through the web interface at
