@@ -21,7 +21,7 @@ my %ok = (
 
 say {STDERR} q{};
 
-if (prompt -i, "\tEnter an integer: ") {
+if (prompt -in=>*STDIN, -i, "\tEnter an integer: ") {
     $ok{'Pure prompt'} = m{ ^ \s* [+-]? \d++ \s* $ }x;
 }
 

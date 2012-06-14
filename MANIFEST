@@ -1,4 +1,3 @@
-Build.PL
 Changes
 MANIFEST
 Makefile.PL
@@ -39,5 +38,6 @@ t/guarantee.t
 t/keyletters.t
 t/orlast.t
 t/styles.t
-META.yml                                 Module YAML meta-data (added by MakeMaker)
-META.json                                Module JSON meta-data (added by MakeMaker)
+t/lexical_options.t
+t/list_context.t
+META.yml                                 Module meta-data (added by MakeMaker)

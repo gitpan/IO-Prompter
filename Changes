@@ -52,3 +52,17 @@ Revision history for IO-Prompter
     * Added: use IO::Prompter -argv
 
     * Improved -argv prompting
+
+
+0.003000  Thu Jun 14 21:26:48 2012
+
+    * Added lexically scoped automatic options
+      (e.g. use IO::Prompter [-yesno, -single])
+
+    * Fixes for -argv mode (especially filename completion)
+
+    * Added -yesno => $count option
+
+    * BACKWARDS INCOMPATIBLE CHANGE: Changed behaviour of prompt() in
+      list contexts: now returns empty list on failure.
+      Use C<scalar prompt @args> to get old behaviour.

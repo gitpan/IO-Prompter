@@ -7,6 +7,7 @@ WriteMakefile(
     AUTHOR              => 'Damian Conway <DCONWAY@CPAN.org>',
     VERSION_FROM        => 'lib/IO/Prompter.pm',
     ABSTRACT_FROM       => 'lib/IO/Prompter.pm',
+    LICENSE             => 'perl',
     PL_FILES            => {},
     PREREQ_PM => {
         'Test::More'         => 0,

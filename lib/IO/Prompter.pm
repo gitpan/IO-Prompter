@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.002000';
+our $VERSION = '0.003000';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -49,25 +49,43 @@ my $KL_EXTRACT = qr{ (?| \[  ( [[:alnum:]]++ )  \]
 my $KL_DEF_EXTRACT = qr{ \[  ( [[:alnum:]]++ )  \] }xms;
 
 
+# Auxiliary prompts for -Yes => N construct...
+my @YESNO_PROMPTS = (
+    q{Really?},
+    q{You're quite certain?},
+    q{Definitely?},
+    q{You mean it?},
+    q{You truly mean it?},
+    q{You're sure?},
+    q{Have you thought this through?},
+    q{You understand the consequences?},
+);
+
+
 # Remember returned values for history completion...
 my %history_cache;
 
+# Track lexically-scoped default options...
+my @lexical_options = [];
+
 # Export the prompt() sub...
 sub import {
-    my (undef, $input_data) = @_;
+    my (undef, $config_data, @other_args) = @_;
+
     # Handle -argv requests...
-    if (defined $input_data && $input_data eq '-argv') {
-        scalar prompt(-argv);
+    if (defined $config_data && $config_data eq '-argv') {
+        scalar prompt(-argv, @other_args);
     }
 
     # Handle lexical options...
-    elsif (ref $input_data eq 'ARRAY') {
-        _warn( misc => 'Lexical options not yet implemented' );
+    elsif (ref $config_data eq 'ARRAY') {
+        push @lexical_options, $config_data;
+        $^H{'IO::Prompter::scope_number'} = $#lexical_options;
     }
 
     # Handler faked input specifications...
-    elsif (defined $input_data) {
-        $fake_input = $input_data;
+    elsif (defined $config_data) {
+        $fake_input = $config_data;
     }
 
     no strict 'refs';
@@ -82,18 +100,26 @@ sub prompt {
     # Reclaim full control of print statements while prompting...
     local $\ = '';
 
+    # Locate any lexical default options...
+    my $hints_hash = (caller 0)[10] // {};
+    my $scope_num = $hints_hash->{'IO::Prompter::scope_number'} // 0;
+
     # Extract and sanitize configuration arguments...
-    my $opt_ref = _decode_args(@_);
+    my $opt_ref = _decode_args(@{$lexical_options[$scope_num]}, @_);
+
+    # Set up yesno prompts if required...
+    my @yesno_prompts
+        = ($opt_ref->{-yesno}{count}//0) > 1 ? @YESNO_PROMPTS : ();
 
     # Work out where the prompts go, and where the input comes from...
     my $in_filehandle  = $opt_ref->{-in}  // _open_ARGV();
     my $out_filehandle = $opt_ref->{-out} // qualify_to_ref(select);
-    if (!ref $in_filehandle) {
+    if (!openhandle $in_filehandle) {
         open my $fh, '<', $in_filehandle
             or _opt_err('Unacceptable', '-in', 'valid filehandle or filename');
         $in_filehandle = $fh;
     }
-    if (!ref $out_filehandle) {
+    if (!openhandle $out_filehandle) {
         open my $fh, '>', $out_filehandle
             or _opt_err('Unacceptable', '-out', 'valid filehandle or filename');
         $out_filehandle = $fh;
@@ -121,6 +147,7 @@ sub prompt {
 
     # Handle menu structures...
     my $input;
+    REPROMPT_YESNO:
     if ($opt_ref->{-menu}) {
         # Remember top of (possibly nested) menu...
         my @menu = ( $opt_ref->{-menu} );
@@ -221,14 +248,26 @@ sub prompt {
     my $succeeded = defined $input;
 
     # The -yesno variants also need a 'y' to be successful...
-    if ($opt_ref->{-yesno}) {
+    if ($opt_ref->{-yesno}{count}) {
         $succeeded &&= $input =~ m{\A \s* y}ixms;
+        if ($succeeded && $opt_ref->{-yesno}{count} > 1) {
+            my $count = --$opt_ref->{-yesno}{count};
+            $opt_ref->{-prompt}
+                = @yesno_prompts ? shift(@yesno_prompts) . q{ }
+                : $count > 1     ? qq{Please confirm $count more times }
+                :                   q{Please confirm one last time }
+                ;
+            goto REPROMPT_YESNO;    # Gasp, yes goto is the cleanest way!
+        }
     }
 
     # Verbatim return doesn't do fancy tricks...
     if ($opt_ref->{-verbatim}) {
         return $input // ();
     }
+
+    # Failure in a list context returns nothing...
+    return if LIST && !$succeeded;
 
     # Otherwise, be context sensitive...
     return
@@ -323,7 +362,7 @@ sub _decode_style {
 # Generate safe closure around active sub...
 sub _gen_wrapper_for {
     my ($arg) = @_;
-    return ref $arg ne 'CODE' 
+    return ref $arg ne 'CODE'
            ? sub { $arg }
            : sub { eval { for (shift) { no warnings; return $arg->($_) // $_ } } };
 }
@@ -397,22 +436,55 @@ sub _decode_args {
                 }
 
                 # The -yesno variants...
-                when (/^-YesNo$|^-YN/) {
-                    $option{-yesno} = { '[YN]' => qr{\A \s* [YN] }xms };
-                    $redo = $arg =~ s/^-YN/-Y/;
+                when (/^-YesNo$/) {
+                    my $count = @_ && looks_like_number($_[0]) ? shift @_ : 1;
+                    $option{-yesno} = {
+                        must => { '[YN]' => qr{\A \s* [YN] }xms },
+                        count  => $count,
+                    };
                 }
-                when (/^-yesno$|^-yn/) {
-                    $option{-yesno} = { '[yn]' => qr{\A \s* [YN] }ixms };
-                    $redo = $arg =~ s/^-yn/-y/;
+                when (/^-YN/) {
+                    $option{-yesno} = {
+                        must => { '[YN]' => qr{\A \s* [YN] }xms },
+                        count  => 1,
+                    };
+                    $redo = 2;
                 }
-                when (/^-Yes$|^-Y/) {
-                    $option{-yesno}
-                        = { '[Y for yes]' => qr{\A \s* (?: [^y] | \Z) }xms };
-                    $redo = $arg =~ /^-Y(?!es)/;
+                when (/^-yesno$/) {
+                    my $count = @_ && looks_like_number($_[0]) ? shift @_ : 1;
+                    $option{-yesno} = {
+                        must => { '[yn]' => qr{\A \s* [YN] }ixms },
+                        count  => $count,
+                    };
                 }
-                when (/^-yes$|^-y/) {
-                    $option{-yesno} = {};
-                    $redo = $arg =~ /^-y(?!es)/;
+                when (/^-yn/) {
+                    $option{-yesno} = {
+                        must => { '[yn]' => qr{\A \s* [YN] }ixms },
+                        count  => 1,
+                    };
+                    $redo = 2;
+                }
+                when (/^-Yes$/) {
+                    my $count = @_ && looks_like_number($_[0]) ? shift @_ : 1;
+                    $option{-yesno} = {
+                        must => { '[Y for yes]' => qr{\A \s* (?: [^y] | \Z) }xms },
+                        count  => $count,
+                    };
+                }
+                when (/^-Y/) {
+                    $option{-yesno} = {
+                        must => { '[Y for yes]' => qr{\A \s* (?: [^y] | \Z) }xms },
+                        count  => 1,
+                    };
+                    $redo = 1;
+                }
+                when (/^-yes$/) {
+                    my $count = @_ && looks_like_number($_[0]) ? shift @_ : 1;
+                    $option{-yesno} = { count  => $count };
+                }
+                when (/^-y/) {
+                    $option{-yesno} = { count  => 1 };
+                    $redo = 1;
                 }
 
                 # Load @ARGV...
@@ -444,10 +516,10 @@ sub _decode_args {
                 }
 
                 # Specify a file request...
-                when (/^-f(?:ilename)?$/) {
+                when (/^-f(?:ilenames?)?$/) {
                     $option{-must}{'0: be an existing file'} = sub { -e $_[0] };
                     $option{-must}{'1: be readable'}         = sub { -r $_[0] };
-                    $option{-complete}                       = 'filename';
+                    $option{-complete}                       = 'filenames';
                 }
 
                 # Specify prompt echoing colour/style...
@@ -638,7 +710,7 @@ sub _decode_args {
                 # Specify what to echo when a character is keyed...
                 when (/^-(echo|ret(?:urn)?)$/) {
                     my $flag = $1 eq 'echo' ? '-echo' : '-return';
-                    if ($flag eq '-echo' && !eval { require Term::ReadKey }) {
+                    if ($flag eq '-echo' && !eval { no warnings 'deprecated'; require Term::ReadKey }) {
                         _warn( bareword => "Warning: next input will be in plaintext\n");
                     }
                     my $arg = @_ && $_[0] !~ /^-/ ? shift(@_)
@@ -647,7 +719,7 @@ sub _decode_args {
                     $option{$flag} = _gen_wrapper_for(_decode_echo($arg));
                 }
                 when (/^-e(.*)/) {
-                    if (!eval { require Term::ReadKey }) {
+                    if (!eval { no warnings 'deprecated'; require Term::ReadKey }) {
                         _warn( bareword => "Warning: next input will be in plaintext\n");
                     }
                     my $arg = $1;
@@ -688,7 +760,7 @@ sub _decode_args {
             }
 
             # Handle option bundling...
-            redo DECODING if $redo && $arg =~ s{\A -. (?=.)}{-}xms;
+            redo DECODING if $redo && $arg =~ s{\A -.{$redo} (?=.)}{-}xms;
         }
     }
 
@@ -706,22 +778,25 @@ sub _decode_args {
     }
 
     # Adjust prompt as necessary...
-    if (!defined $option{-prompt}) {
-        # Missing prompt defaults to simple prompt...
-        if ($option{-argv}) {
-            my $not_first;
-            $option{-complete} = 'filename';
-            $option{-prompt} = "> $0  [enter command line args here]\r> $0 ";
-            $option{-echo}   = sub{
-                my $char = shift;
-                $option{-prompt} = "> $0 ";  # Sneaky resetting to handle completions
-                return $char if $not_first++;
-                return "\r> $0                                \r> $0 $char";
-            }
+    if ($option{-argv}) {
+        my $progname = $option{-prompt} // $0;
+        $progname =~ s{^.*/}{}xms;
+
+        my $HINT = '[enter command line args here]';
+        $option{-prompt} = "> $progname  $HINT\r> $progname ";
+
+        $option{-complete} = 'filenames';
+
+        my $not_first;
+        $option{-echo}   = sub{
+            my $char = shift;
+            $option{-prompt} = "> $progname ";  # Sneaky resetting to handle completions
+            return $char if $not_first++;
+            return "\r> $progname  " . (q{ } x length $HINT) . "\r> $progname $char";
         }
-        else {
-            $option{-prompt} = '> ';
-        }
+    }
+    elsif (!defined $option{-prompt}) {
+        $option{-prompt} = '> ';
     }
     elsif ($option{-prompt} =~ m{ \S \z}xms) {
         # If prompt doesn't end in whitespace, make it so...
@@ -819,13 +894,13 @@ sub _verify_input_constraints {
 
     # Combine -yesno and -must constraints...
     my %constraint_for = (
-        %{$extras//{}},
-        %{$opt_ref->{-yesno}//{}},
+        %{ $extras // {} },
+        %{ $opt_ref->{-yesno}{must} // {} },
         @must_kv_list,
     );
     my @constraints = (
-        keys %{$extras//{}},
-        keys %{$opt_ref->{-yesno}//{}},
+        keys %{ $extras // {} },
+        keys %{ $opt_ref->{-yesno}{must} // {} },
         @clean_key_for{@must_keys},
     );
 
@@ -948,7 +1023,7 @@ sub _simulate_typing {
 }
 
 sub _term_width {
-    my ($term_width) = eval { Term::ReadKey::GetTerminalSize(\*STDERR) };
+    my ($term_width) = eval { no warnings 'deprecated'; Term::ReadKey::GetTerminalSize(\*STDERR) };
     return $term_width // $DEFAULT_TERM_WIDTH;
 }
 
@@ -1060,7 +1135,7 @@ sub _display_completions {
 sub _generate_unbuffered_reader_from {
     my ($in_fh, $outputter_ref, $opt_ref) = @_;
 
-    my $has_readkey = eval { require Term::ReadKey };
+    my $has_readkey = eval { no warnings 'deprecated'; require Term::ReadKey };
 
     # If no per-character reads, fall back on buffered input...
     if (!-t $in_fh || !$has_readkey) {
@@ -1428,7 +1503,7 @@ my %synonyms = (
     reverse   => [qw<reversed inverse inverted>],
     concealed => [qw<hidden blank invisible>],
     bright_   => [qw< bright\s+ vivid\s+ >],
-    red       => [qw< scarlet vermilion crimson ruby cherry cerise cardinal carmine 
+    red       => [qw< scarlet vermilion crimson ruby cherry cerise cardinal carmine
                       burgundy claret chestnut copper garnet geranium russet
                       salmon titian coral cochineal rose cinnamon ginger gules >],
     yellow    => [qw< gold golden lemon cadmium daffodil mustard primrose tawny
@@ -1525,7 +1600,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.002000
+This document describes IO::Prompter version 0.003000
 
 
 =head1 SYNOPSIS
@@ -1569,9 +1644,28 @@ C<< '> ' >> is used instead.
 Normally, when C<prompt()> is called in either list or scalar context,
 it returns an opaque object that autoconverts to a string. In scalar
 boolean contexts this return object evaluates true if the input
-operation succeeded. List boolean contexts present a special challenge
-(see L<the C<-verbatim> option|"Returning raw data"> for details and a
-simple solution).
+operation succeeded. In list contexts, if the input operation fails
+C<prompt()> returns an empty list instead of a return object. This
+allows failures in list context to behave correctly (i.e. be false).
+
+If you particularly need a list-context call to C<prompt()> to always
+return a value (i.e. even on failure), prefix the call with C<scalar>:
+
+    # Only produces as many elements
+    # as there were successful inputs...
+    my @data = (
+        prompt('Name:'),
+        prompt(' Age:'),
+        prompt(' Sex:'),
+    );
+
+    # Always produces exactly three elements
+    # (some of which may be failure objects)...
+    my @data = (
+        scalar prompt('Name:'),
+        scalar prompt(' Age:'),
+        scalar prompt(' Sex:'),
+    );
 
 In void contexts, C<prompt()> still requests input, but also issues a
 warning about the general uselessness of performing an I/O operation
@@ -1626,7 +1720,7 @@ or add a L<"no-op"|"Escaping otherwise magic options"> to them.
 
             -echostyle=>SPEC   What colour/style to echo input in
 
-  * -f      -filename          Input should be name of a readable file
+  * -f      -filenames         Input should be name of a readable file
 
             -fail=>VALUE       Return failure if input smartmatches value
 
@@ -1667,12 +1761,47 @@ or add a L<"no-op"|"Escaping otherwise magic options"> to them.
   * -w      -wipe              Clear screen
             -wipefirst         Clear screen on first prompt() call only
 
-  * -y      -yes               Return true if [yY] entered, false otherwise
-    -yn     -yesno             Return true if [yY] entered, false if [nN]
-    -Y      -Yes               Return true if Y entered, false otherwise
-    -YN     -YesNo             Return true if Y entered, false if N
+  * -y      -yes    [=> NUM]   Return true if [yY] entered, false otherwise
+    -yn     -yesno  [=> NUM]   Return true if [yY] entered, false if [nN]
+    -Y      -Yes    [=> NUM]   Return true if Y entered, false otherwise
+    -YN     -YesNo  [=> NUM]   Return true if Y entered, false if N
 
   * -_                         No-op (handy for bundling ambiguous short forms)
+
+
+=head2 Automatic options
+
+Any of the options listed above (and described in detail below) can be
+automatically applied to every call to C<prompt()> in the current
+lexical scope, by passing them (via an array reference) as the arguments
+to a C<use IO::Prompter> statement.
+
+For example:
+
+    use IO::Prompter;
+
+    # This call has no automatically added options...
+    my $assent = prompt "Do you wish to take the test?", -yn;
+
+    {
+        use IO::Prompter [-yesno, -single, -style=>'bold'];
+
+        # These three calls all have: -yesno, -single, -style=>'bold' options
+        my $ready = prompt 'Are you ready to begin?';
+        my $prev  = prompt 'Have you taken this test before?';
+        my $hints = prompt 'Do you want hints as we go?';
+    }
+
+    # This call has no automatically added options...
+    scalar prompt 'Type any key to start...', -single;
+
+The current scope's lexical options are always I<prepended> to the
+argument list of any call to C<prompt()> in that scope.
+
+To turn off any existing automatic options for the rest of the current
+scope, use:
+
+    use IO::Prompter [];
 
 
 =head2 Options reference
@@ -2055,11 +2184,27 @@ This feature is most useful during development, to allow a program to be
 run from within an editor, and yet pass it a variety of command-lines. The
 typical usage is (at the start of a program):
 
-    BEGIN { prompt -a }
+    use IO::Prompter;
+    BEGIN { prompt -argv }
 
-Or, for a more sophisticated simulation:
+However, because this pattern is so typical, there is a shortcut:
 
-    BEGIN { prompt -a, -complete=>'filenames' }
+    use IO::Prompter -argv;
+
+You can also specify the name with which the program args, are to
+be prompted, in the usual way (i.e. by providing a prompt):
+
+    use IO::Prompter -argv, 'demo.pl';
+
+Note, however, the critical difference between that shortcut
+(which calls C<prompt -argv> when the module is loaded) and:
+
+    use IO::Prompter [-argv];
+
+(which sets C<-argv> as an automatic option for every subsequent call to
+C<prompt()> in the current lexical scope).
+
+Note too that the C<-argv> option also implies C<-complete=>'filenames'>.
 
 
 =head3 Input autocompletion
@@ -2333,7 +2478,7 @@ will be issued.
 C<< -echostyle => I<SPECIFICATION> >>
 
 The C<-echostyle> option works for the text the user types in
-the same way that the C<-style> option works for the prompt. 
+the same way that the C<-style> option works for the prompt.
 That is, you can specify the style and colour in which the user's
 input will be rendered like so:
 
@@ -2524,12 +2669,12 @@ For example:
 
 =item C<< -f >>
 
-=item C<< -filename >>
+=item C<< -filenames >>
 
 =back
 
 You can tell C<prompt()> to accept only valid filenames, using the
-C<-filename> option (or its shortcut: C<-f>).
+C<-filenames> option (or its shortcut: C<-f>).
 
 This option is equivalent to the options:
 
@@ -2537,9 +2682,9 @@ This option is equivalent to the options:
         'File must exist'       => sub { -e },
         'File must be readable' => sub { -r },
     },
-    -complete => 'filename',
+    -complete => 'filenames',
 
-In other words C<-filename> requires C<prompt()> to accept only the name
+In other words C<-filenames> requires C<prompt()> to accept only the name
 of an existing, readable file, and it also activates filename completion.
 
 
@@ -2812,39 +2957,6 @@ Note however that, under C<-verbatim>, the input is still
 autochomped (unless you also specify
 L<the C<-line> option|"Preserving terminal newlines">.
 
-The main advantage of C<-verbatim> mode is that it causes C<prompt()> to
-return an empty list on failure in list contexts, which allows the subroutine
-to act as expected list contexts. For example:
-
-    push @input, prompt "Anything else to add?", -verbatim;
-
-leaves C<@input> unchanged if there is no input, whereas:
-
-    push @input, prompt "Anything else to add?";
-
-would I<always> push an extra object onto the end of the array, even
-when there is no input.
-
-This is especially important for boolean list contexts, where
-the normal "always return an object" behaviour of C<prompt()> can create
-problems:
-
-    if (my ($data) = prompt('Data:')) {
-        # prompt() returns a single "failed" object on failure
-        # so the list contains one element,
-        # so the boolean test is always true
-        # this block ALWAYS executes :-(
-    }
-
-In such cases, you need to use the C<-verbatim> option to ensure that
-failures are "list false":
-
-    if (my ($data) = prompt('Data:', -verbatim)) {
-        # prompt() now returns an empty list on failure
-        # so this block only executes after a successful prompt :-)
-    }
-
-
 
 =head3 Prompting on a clear screen
 
@@ -2875,6 +2987,8 @@ actual first call will wipe the screen.
 
 =item C<< -yes[no] >> or C<< -Yes[No] >>
 
+=item C<< -yes[no] => COUNT >> or C<< -Yes[No] => COUNT >>
+
 =back
 
 This option invokes a special mode that can be used to confirm (or deny)
@@ -2901,6 +3015,20 @@ so:
 so that the user can just hit C<y> or C<n> to continue, without having to hit
 C<< <ENTER>/<RETURN> >> as well.
 
+If the optional I<COUNT> argument is supplied, the prompting is repeated
+that many times, with increasingly insistent requests for confirmation.
+The answer must be "yes" in each case for the final result to be true.
+For example:
+
+    $rm_star = prompt("Do you want to delete all files? ", -Yes=>3 );
+
+might prompt:
+
+    Do you want to delete all files?  Y
+    Really?  Y
+    Are you sure?  Y
+
+
 
 =head3 Bundling short-form options
 
@@ -2915,8 +3043,8 @@ you could just write:
 
 This often does I<not> improve readability (as the preceding example
 demonstrates), but is handy for common usages such as C<-y1> ("ask for
-confirmation, don't require an C<< <ENTER>/<RETURN> >>) or C<-vl> ("Return a
-verbatim and unchomped string").
+confirmation, don't require an C<< <ENTER>/<RETURN> >>) or C<-vl>
+("Return a verbatim and unchomped string").
 
 
 =head3 Escaping otherwise-magic options
