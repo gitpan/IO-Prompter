@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.003000';
+our $VERSION = '0.003001';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -698,7 +698,7 @@ sub _decode_args {
                     _opt_err('Missing', -complete, 'completions') if !@_;
                     my $comp_spec = shift @_;
                     my $comp_type = ref($comp_spec) || $comp_spec || '???';
-                    if ($comp_type =~ m{\A(?: file\w* | ARRAY | HASH | CODE )\Z}xms) {
+                    if ($comp_type =~ m{\A(?: file\w* | dir\w* | ARRAY | HASH | CODE )\Z}xms) {
                         $option{-complete} = $comp_spec;
                     }
                     else {
@@ -1600,7 +1600,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.003000
+This document describes IO::Prompter version 0.003001
 
 
 =head1 SYNOPSIS
@@ -2467,6 +2467,11 @@ would be used to shroud a password entry, like so:
     # Echo password showing only asterisks:
     my $passwd
         = prompt 'Password:', -echo=>"*";
+
+As a special case, if the C<-echo> value contains a slash (C</>) and the
+any of the <-yesno> options is also specified, the substring before the
+slash is taken as the string to echo for a 'yes' input, and the
+substring after the slash is echoed for a 'no' input.
 
 Note that this option is only available when the Term::ReadKey module
 is installed. If it is used when that module is not available, a warning

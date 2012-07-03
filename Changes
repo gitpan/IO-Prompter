@@ -53,8 +53,7 @@ Revision history for IO-Prompter
 
     * Improved -argv prompting
 
-
-0.003000  Thu Jun 14 21:26:48 2012
+0.003000  Thu Jun 14 21:34:33 EST 2012
 
     * Added lexically scoped automatic options
       (e.g. use IO::Prompter [-yesno, -single])
@@ -66,3 +65,11 @@ Revision history for IO-Prompter
     * BACKWARDS INCOMPATIBLE CHANGE: Changed behaviour of prompt() in
       list contexts: now returns empty list on failure.
       Use C<scalar prompt @args> to get old behaviour.
+
+
+0.003001  Tue Jul  3 17:54:40 2012
+
+    * Documented -echo=>'yea/nay' special case
+
+    * Fixed erroneous error message when completing with 'dirnames'
+      (thanks Matthias!)
