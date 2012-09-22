@@ -73,3 +73,8 @@ Revision history for IO-Prompter
 
     * Fixed erroneous error message when completing with 'dirnames'
       (thanks Matthias!)
+
+
+0.004000  Sat Sep 22 14:30:13 2012
+
+    * Added ^A, ^B, ^E, ^F for in-line editing

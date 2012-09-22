@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.003001';
+our $VERSION = '0.004000';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -38,6 +38,13 @@ my $FAKE_ESC = "\e";
 my $MENU_ESC = "\e";
 my $MENU_MK  = '__M_E_N_U__';
 
+my %EDIT = (
+    BACK    => qq{\cB},
+    FORWARD => qq{\cF},
+    START   => qq{\cA},
+    END     => qq{\cE},
+);
+my $EDIT_KEY = '['.join(q{},keys %EDIT).']';
 
 # Extracting key letters...
 my $KL_EXTRACT = qr{ (?| \[  ( [[:alnum:]]++ )  \]
@@ -1144,6 +1151,7 @@ sub _generate_unbuffered_reader_from {
 
     # Adapt to local control characters...
     my %ctrl = eval { Term::ReadKey::GetControlChars($in_fh) };
+    delete $ctrl{$_} for grep { $ctrl{$_} eq "\cA" } keys %ctrl;
     my $ctrl = join '|', values %ctrl;
 
     my $VERBATIM_KEY = $ctrl{QUOTENEXT} // $DEFAULT_VERBATIM_KEY;
@@ -1184,6 +1192,7 @@ sub _generate_unbuffered_reader_from {
         }
 
         my $input = q{};
+        my $insert_offset = 0;
         INPUT:
         while (1) {
             state $prev_was_verbatim = 0;
@@ -1204,6 +1213,8 @@ sub _generate_unbuffered_reader_from {
 
             # If not EOF...
             if (defined $next) {
+                # Remember where we were parked...
+                my $prev_insert_offset = $insert_offset;
 
                 # Handle interrupts...
                 if ($next eq $ctrl{INTERRUPT}) {
@@ -1296,14 +1307,35 @@ sub _generate_unbuffered_reader_from {
 
                 # Handle erasures (including pushbacks if faking)...
                 elsif (!$prev_was_verbatim && $next eq $ctrl{ERASE} && length $input) {
-                    my $erased = substr($input, -1, 1, q{});
-                    if ($faking) {
-                        substr($local_fake_input,0,0,$erased);
+                    if ($insert_offset) {
+                        # Can't erase past start of input...
+                        next INPUT if $insert_offset >= length($input);
+
+                        # Erase character just before cursor...
+                        substr($input, -$insert_offset-1, 1, q{});
+
+                        # Redraw...
+                        my $input_pre  = substr($input.' ',0,length($input)-$insert_offset+1);
+                        my $input_post = substr($input.' ',length($input)-$insert_offset);
+                        my $display_pre  = join q{}, map { $opt_ref->{-echo}($_) } split //, $input_pre;
+                        my $display_post = join q{}, map { $opt_ref->{-echo}($_) } split //, $input_post;
+                        $outputter_ref->( -echostyle =>
+                              "\b" x length($display_pre)
+                            . join(q{}, map { $opt_ref->{-echo}($_) } split //, $input)
+                            . q{ } x length($opt_ref->{-echo}(q{ }))
+                            . "\b" x length($display_post)
+                        );
                     }
-                    $outputter_ref->( -nostyle =>
-                        map { $_ x (length($opt_ref->{-echo}($_)//'X')) }
-                            "\b", ' ', "\b"
-                    );
+                    else {
+                        my $erased = substr($input, -1, 1, q{});
+                        if ($faking) {
+                            substr($local_fake_input,0,0,$erased);
+                        }
+                        $outputter_ref->( -nostyle =>
+                            map { $_ x (length($opt_ref->{-echo}($_)//'X')) }
+                                "\b", ' ', "\b"
+                        );
+                    }
                     next INPUT;
                 }
 
@@ -1383,16 +1415,53 @@ sub _generate_unbuffered_reader_from {
                                     : q{};
                     }
 
-                    # Check for input restrictions...
-                    if (exists $opt_ref->{-guarantee}) {
-                        next INPUT if ($input.$next) !~ $opt_ref->{-guarantee};
+                    # Handle editing...
+                    elsif ($next eq $EDIT{BACK}) {
+                        $insert_offset += ($insert_offset < length $input) ? 1 : 0;
+                    }
+                    elsif ($next eq $EDIT{FORWARD}) {
+                        $insert_offset += ($insert_offset > 0) ? -1 : 0;
+                    }
+                    elsif ($next eq $EDIT{START}) {
+                        $insert_offset = length($input);
+                    }
+                    elsif ($next eq $EDIT{END}) {
+                        $insert_offset = 0;
                     }
 
-                    # Add the new input char to the accumulated input string...
-                    $input .= $next;
+                    # Handle non-editing...
+                    else {
+                        # Check for input restrictions...
+                        if (exists $opt_ref->{-guarantee}) {
+                            next INPUT if ($input.$next) !~ $opt_ref->{-guarantee};
+                        }
+
+                        # Add the new input char to the accumulated input string...
+                        if ($insert_offset) {
+                            substr($input, -$insert_offset, 0) = $next;
+                            $prev_insert_offset++;
+                        }
+                        else {
+                            $input .= $next;
+                        }
+                    }
 
                     # Display the character (or whatever was specified)...
-                    $outputter_ref->(-echostyle => $opt_ref->{-echo}($next));
+
+                    if ($insert_offset || $prev_insert_offset) {
+                        my $input_pre  = substr($input,0,length($input)-$prev_insert_offset);
+                        my $input_post = substr($input,length($input)-$insert_offset);
+                        my $display_pre  = join q{}, map { $opt_ref->{-echo}($_) } split //, $input_pre;
+                        my $display_post = join q{}, map { $opt_ref->{-echo}($_) } split //, $input_post;
+                        $outputter_ref->( -echostyle =>
+                              "\b" x length($display_pre)
+                            . join(q{}, map { $opt_ref->{-echo}($_) } split //, $input)
+                            . "\b" x length($display_post)
+                        );
+                    }
+                    elsif ($next !~ $EDIT_KEY) {
+                        $outputter_ref->(-echostyle => $opt_ref->{-echo}($next));
+                    }
 
                     # Not verbatim after this...
                     $prev_was_verbatim = 0;
@@ -1400,6 +1469,8 @@ sub _generate_unbuffered_reader_from {
                 else {
                     # Not verbatim after mysterious ctrl input...
                     $prev_was_verbatim = 0;
+
+                    say grep { $ctrl{$_} eq $next } keys %ctrl;
 
                     next INPUT;
                 }
@@ -1600,7 +1671,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.003001
+This document describes IO::Prompter version 0.004000
 
 
 =head1 SYNOPSIS
@@ -1675,7 +1746,6 @@ See L<"Useful useless uses of C<prompt()>"> for an exception to this.
 The C<prompt()> function also sets C<$_> if it is called in a boolean
 context but its return value is not assigned to a variable. Hence, it is
 designed to be a drop-in replacement for C<readline> or C<< <> >>.
-
 
 =head1 INTERFACE
 
@@ -2499,6 +2569,32 @@ Note that C<-echostyle> is completely independent of C<-echo>:
 
 The C<-echostyle> option requires C<Term::ANSIColor>, and will
 be silently ignored if that module is not available.
+
+
+=head4 Input editing
+
+When the Term::ReadKey module is available, C<prompt()> also honours a
+subset of the usual input cursor motion commands:
+
+=over
+
+=item C<CTRL-B>
+
+Move the cursor back one character
+
+=item C<CTRL-F>
+
+Move the cursor forward one character
+
+=item C<CTRL-A>
+
+Move the cursor to the start of the input
+
+=item C<CTRL-E>
+
+Move the cursor to the end of the input
+
+=back
 
 
 =head3 Specifying when input should fail
