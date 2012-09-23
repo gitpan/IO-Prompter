@@ -78,3 +78,9 @@ Revision history for IO-Prompter
 0.004000  Sat Sep 22 14:30:13 2012
 
     * Added ^A, ^B, ^E, ^F for in-line editing
+
+
+0.004001  Sun Sep 23 21:18:33 2012
+
+    * Fixed nasty bug that prevented echoing most upper-case input
+

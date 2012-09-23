@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004000';
+our $VERSION = '0.004001';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -44,7 +44,7 @@ my %EDIT = (
     START   => qq{\cA},
     END     => qq{\cE},
 );
-my $EDIT_KEY = '['.join(q{},keys %EDIT).']';
+my $EDIT_KEY = '['.join(q{},values %EDIT).']';
 
 # Extracting key letters...
 my $KL_EXTRACT = qr{ (?| \[  ( [[:alnum:]]++ )  \]
@@ -1671,7 +1671,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004000
+This document describes IO::Prompter version 0.004001
 
 
 =head1 SYNOPSIS
