@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004001';
+our $VERSION = '0.004002';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -1416,7 +1416,7 @@ sub _generate_unbuffered_reader_from {
                     }
 
                     # Handle editing...
-                    elsif ($next eq $EDIT{BACK}) {
+                    if ($next eq $EDIT{BACK}) {
                         $insert_offset += ($insert_offset < length $input) ? 1 : 0;
                     }
                     elsif ($next eq $EDIT{FORWARD}) {
@@ -1671,7 +1671,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004001
+This document describes IO::Prompter version 0.004002
 
 
 =head1 SYNOPSIS

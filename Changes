@@ -84,3 +84,9 @@ Revision history for IO-Prompter
 
     * Fixed nasty bug that prevented echoing most upper-case input
 
+
+
+0.004002  Mon Sep 24 11:39:24 2012
+
+    * Fixed induced error in input faking
+

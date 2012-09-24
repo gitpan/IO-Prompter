@@ -1,4 +1,4 @@
-IO::Prompter version 0.004001
+IO::Prompter version 0.004002
 
 Prompt for, read, vet, chomp, and encapsulate input.
 Like so:
