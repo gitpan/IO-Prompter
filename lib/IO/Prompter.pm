@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004002';
+our $VERSION = '0.004003';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -239,7 +239,7 @@ sub prompt {
     }
 
     # "Those who remember history are enabled to repeat it"...
-    if (defined $input) {
+    if (defined $input and $opt_ref->{-history} ne 'NONE') {
         my $history_set = $history_cache{ $opt_ref->{-history} } //= [] ;
         @{ $history_set } = ($input, grep { $_ ne $input } @{ $history_set });
     }
@@ -1152,7 +1152,12 @@ sub _generate_unbuffered_reader_from {
     # Adapt to local control characters...
     my %ctrl = eval { Term::ReadKey::GetControlChars($in_fh) };
     delete $ctrl{$_} for grep { $ctrl{$_} eq "\cA" } keys %ctrl;
-    my $ctrl = join '|', values %ctrl;
+
+    $ctrl{EOF}       //= "\4";
+    $ctrl{INTERRUPT} //= "\3";
+    $ctrl{ERASE}     //= "\177";
+
+    my $ctrl           = join '|', values %ctrl;
 
     my $VERBATIM_KEY = $ctrl{QUOTENEXT} // $DEFAULT_VERBATIM_KEY;
 
@@ -1671,7 +1676,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004002
+This document describes IO::Prompter version 0.004003
 
 
 =head1 SYNOPSIS
@@ -2342,7 +2347,7 @@ For example:
 
 The C<prompt()> subroutine also tracks previous input and allows you to
 complete with that instead. No special option is required, as the
-feature is always enabled.
+feature is enabled by default.
 
 At the start of a prompted input, the user can cycle backwards through
 previous inputs by pressing C<< <CTRL-R> >> (this can be changed
@@ -2427,6 +2432,9 @@ prompts. For example:
     for my $n (1..3) {
         $address .= prompt "Address (line $n):", -hADDR;
     }
+
+If you specify C<'NONE'> as the history set, the input is not
+recorded in the history. This is useful when inputting passwords.
 
 
 =head4 Configuring the autocompletion interaction
