@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004003';
+our $VERSION = '0.004005';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -197,7 +197,7 @@ sub prompt {
             push @menu,
                 _build_menu($input,
                              "Select from $menu[-1]{key_for}{$tag}: ",
-                             $opt_ref->{-number} || $opt_ref->{integer}
+                             $opt_ref->{-number} || $opt_ref->{-integer}
                 );
             $menu[-1]{prompt} .= '> ';
         }
@@ -974,6 +974,8 @@ sub _generate_buffered_reader_from {
     }
 
     return sub {
+        my ($extra_constraints) = @_;
+
         INPUT:
         while (1) {
             if (!$has_timeout || select $readbits, undef, undef, $timeout) {
@@ -1001,7 +1003,7 @@ sub _generate_buffered_reader_from {
 
                 if (defined $input) {
                     _verify_input_constraints(
-                        \$input, \$local_fake_input, $outputter_ref, $opt_ref
+                        \$input, \$local_fake_input, $outputter_ref, $opt_ref, $extra_constraints
                     );
                 }
 
@@ -1676,7 +1678,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004003
+This document describes IO::Prompter version 0.004005
 
 
 =head1 SYNOPSIS

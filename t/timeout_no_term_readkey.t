@@ -10,6 +10,9 @@ use IO::Prompter;
 if (!-t *STDIN || !-t *STDERR) {
     plan('skip_all' => 'Non-interactive test environment');
 }
+elsif ($^O =~ /Win/) {
+    plan('skip_all' => 'Skipping interactive tests under Windows');
+}
 else {
     plan('no_plan');
 }

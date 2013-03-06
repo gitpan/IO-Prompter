@@ -95,3 +95,15 @@ Revision history for IO-Prompter
 
     * Patched history mechanism to allow non-recording of input history
       (thanks Brian!)
+
+
+0.004004  Sun Jan 27 09:05:25 2013
+
+    * Patched missing validity check for non-ReadKey input under -menu
+      (thanks Kalyan Raj!)
+
+
+0.004005  Wed Mar  6 09:19:56 2013
+
+    * Disabled interactive testing on Windows platforms
+      (thanks Brian and Lady Aleena)

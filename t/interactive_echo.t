@@ -8,6 +8,9 @@ use IO::Prompter;
 if (!-t *STDIN || !-t *STDERR) {
     plan('skip_all' => 'Non-interactive test environment');
 }
+elsif ($^O =~ /Win/) {
+    plan('skip_all' => 'Skipping interactive tests under Windows');
+}
 elsif (!eval { require Term::ReadKey }) {
     plan('skip_all' => 'Term::ReadKey not available');
     exit;
