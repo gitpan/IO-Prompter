@@ -107,3 +107,10 @@ Revision history for IO-Prompter
 
     * Disabled interactive testing on Windows platforms
       (thanks Brian and Lady Aleena)
+
+
+0.004006  Thu Aug 29 10:28:48 2013
+
+    * Better handling of input EOL under Windows (thanks Bas)
+
+    * Workaround for Term::ReadKey bug under Windows (thanks Bas)

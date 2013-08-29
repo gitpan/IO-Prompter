@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004005';
+our $VERSION = '0.004006';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -211,7 +211,7 @@ sub prompt {
 
     # Provide default value if available and necessary...
     my $defaulted = 0;
-    if (defined $input && $input =~ /\A\n?\Z/ && exists $opt_ref->{-def}) {
+    if (defined $input && $input =~ /\A\R?\Z/ && exists $opt_ref->{-def}) {
         $input = $opt_ref->{-def};
         $defaulted = 1;
     }
@@ -941,7 +941,7 @@ sub _verify_input_constraints {
 
         # Reset faked input, if any...
         if (defined $fake_input && length($fake_input) > 0) {
-            $fake_input =~ s{ \A (.*) \n? }{}xm;
+            $fake_input =~ s{ \A (.*) \R? }{}xm;
             ${$local_fake_input_ref} = $1;
         }
 
@@ -969,7 +969,7 @@ sub _generate_buffered_reader_from {
     # Set up local faked input, if any...
     my $local_fake_input;
     if (defined $fake_input && length($fake_input) > 0) {
-        $fake_input =~ s{ \A (.*) \n? }{}xm;
+        $fake_input =~ s{ \A (.*) \R? }{}xm;
         $local_fake_input = $1;
     }
 
@@ -1163,8 +1163,8 @@ sub _generate_unbuffered_reader_from {
 
     my $VERBATIM_KEY = $ctrl{QUOTENEXT} // $DEFAULT_VERBATIM_KEY;
 
-    # Translate timeout for ReadKey...
-    my $timeout = !defined $opt_ref->{-timeout} ? 0
+    # Translate timeout for ReadKey (with MAXINT workaround for Windows)...
+    my $timeout = !defined $opt_ref->{-timeout} ? (-1>>1)   # MAXINT
                 : $opt_ref->{-timeout} == 0     ? -1
                 :                                 $opt_ref->{-timeout}
                 ;
@@ -1194,7 +1194,7 @@ sub _generate_unbuffered_reader_from {
         # Set up local faked input, if any...
         my $local_fake_input;
         if (defined $fake_input && length($fake_input) > 0) {
-            $fake_input =~ s{ \A (.*) \n? }{}xm;
+            $fake_input =~ s{ \A (.*) \R? }{}xm;
             $local_fake_input = $1;
         }
 
@@ -1362,7 +1362,7 @@ sub _generate_unbuffered_reader_from {
                 }
 
                 # Handle returns...
-                elsif (!$prev_was_verbatim && $next eq "\n") {
+                elsif (!$prev_was_verbatim && $next =~ /\A\R\z/) {
                     # Complete faked line, if faked input incomplete...
                     if ($faking && length($local_fake_input)) {
                         for (split q{}, $local_fake_input) {
@@ -1382,7 +1382,7 @@ sub _generate_unbuffered_reader_from {
                     );
 
                     # Echo a default value if appropriate...
-                    if ($input =~ m{\A\n?\Z}xms && defined $opt_ref->{-def}) {
+                    if ($input =~ m{\A\R?\Z}xms && defined $opt_ref->{-def}) {
                         my $def_val = $opt_ref->{-def};
 
                         # Try to find the key, for a menu...
@@ -1500,7 +1500,7 @@ sub _generate_unbuffered_reader_from {
                 # Otherwise supply a final newline if necessary...
                 if ( $opt_ref->{-single}
                 &&   exists $opt_ref->{-return}
-                &&   $input ne "\n" ) {
+                &&   $input !~ /\A\R\z/ ) {
                     $outputter_ref->(-echostyle => $opt_ref->{-return}(q{}));
                 }
 
@@ -1678,7 +1678,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004005
+This document describes IO::Prompter version 0.004006
 
 
 =head1 SYNOPSIS

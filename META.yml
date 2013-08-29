@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               IO-Prompter
-version:            0.004005
+version:            0.004006
 abstract:           Prompt for input, read it, clean it, return it.
 author:
     - Damian Conway <DCONWAY@CPAN.org>
