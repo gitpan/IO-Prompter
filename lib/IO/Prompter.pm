@@ -8,7 +8,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004006';
+our $VERSION = '0.004007';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -1163,8 +1163,8 @@ sub _generate_unbuffered_reader_from {
 
     my $VERBATIM_KEY = $ctrl{QUOTENEXT} // $DEFAULT_VERBATIM_KEY;
 
-    # Translate timeout for ReadKey (with MAXINT workaround for Windows)...
-    my $timeout = !defined $opt_ref->{-timeout} ? (-1>>1)   # MAXINT
+    # Translate timeout for ReadKey (with 32-bit MAXINT workaround for Windows)...
+    my $timeout = !defined $opt_ref->{-timeout} ? 0x7FFFFFFF    # 68 years
                 : $opt_ref->{-timeout} == 0     ? -1
                 :                                 $opt_ref->{-timeout}
                 ;
@@ -1678,7 +1678,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004006
+This document describes IO::Prompter version 0.004007
 
 
 =head1 SYNOPSIS

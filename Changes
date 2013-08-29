@@ -114,3 +114,9 @@ Revision history for IO-Prompter
     * Better handling of input EOL under Windows (thanks Bas)
 
     * Workaround for Term::ReadKey bug under Windows (thanks Bas)
+
+
+0.004007  Fri Aug 30 07:25:33 2013
+
+    * Reworked workaround for Term::ReadKey timeout bug under Windows
+      (thanks again, Bas)
