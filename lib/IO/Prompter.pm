@@ -2,13 +2,14 @@ use 5.010;
 package IO::Prompter;
 
 use warnings;
+no if $] >= 5.018000, warnings => 'experimental::smartmatch';
 use strict;
 use Carp;
 use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004007';
+our $VERSION = '0.004008';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -1647,18 +1648,20 @@ sub _std_printer_to {
     my ($out_filehandle, $opt_ref) = @_;
     no strict 'refs';
     _autoflush($out_filehandle);
-    if (eval { require Term::ANSIColor} ) {
+    if (eval { require Term::ANSIColor}) {
         return sub {
             my $style = shift;
-            s{\e}{}gxms for @_;
-            print {$out_filehandle} _stylize($opt_ref->{$style}(@_), @_);
+            my @loc = (@_);
+            s{\e}{}gxms for @loc;
+            print {$out_filehandle} _stylize($opt_ref->{$style}(@loc), @loc);
         };
     }
     else {
         return sub {
             shift; # ...ignore style
-            s{\e}{}gxms for @_;
-            print {$out_filehandle} @_;
+            my @loc = (@_);
+            s{\e}{}gxms for @loc;
+            print {$out_filehandle} @loc;
         };
     }
 }
@@ -1678,7 +1681,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004007
+This document describes IO::Prompter version 0.004008
 
 
 =head1 SYNOPSIS

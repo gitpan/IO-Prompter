@@ -120,3 +120,11 @@ Revision history for IO-Prompter
 
     * Reworked workaround for Term::ReadKey timeout bug under Windows
       (thanks again, Bas)
+
+
+0.004008  Mon Sep 30 14:36:57 2013
+
+    * Further improvements under 5.18, especially for Windows
+      (thanks, Bas)
+
+    * Attempted to mollify cpanm by moving $VERSION declaration
