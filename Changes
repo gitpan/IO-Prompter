@@ -128,3 +128,10 @@ Revision history for IO-Prompter
       (thanks, Bas)
 
     * Attempted to mollify cpanm by moving $VERSION declaration
+
+
+0.004009  Wed Oct  2 21:55:06 2013
+
+    * Further improvements under 5.18
+      (thanks, Gareth)
+    

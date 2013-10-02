@@ -2,14 +2,14 @@ use 5.010;
 package IO::Prompter;
 
 use warnings;
-no if $] >= 5.018000, warnings => 'experimental::smartmatch';
+no if $] >= 5.018000, warnings => 'experimental';
 use strict;
 use Carp;
 use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004008';
+our $VERSION = '0.004009';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -1681,7 +1681,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004008
+This document describes IO::Prompter version 0.004009
 
 
 =head1 SYNOPSIS
