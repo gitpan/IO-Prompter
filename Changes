@@ -134,4 +134,13 @@ Revision history for IO-Prompter
 
     * Further improvements under 5.18
       (thanks, Gareth)
-    
+
+
+
+0.004010  Thu Oct  3 18:17:48 2013
+
+    * Still further improvements under Windows
+      (thanks, Gareth)
+
+    * Fixed spurious ERASEs when deleting "past" start of input
+      (thanks, Gareth)

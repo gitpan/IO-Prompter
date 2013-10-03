@@ -9,7 +9,7 @@ use Contextual::Return;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004009';
+our $VERSION = '0.004010';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -185,7 +185,7 @@ sub prompt {
             }
 
             # Handle defaults by selecting and ejecting...
-            if ($tag =~ /\A\n?\Z/ && exists $opt_ref->{-def}) {
+            if ($tag =~ /\A\R?\Z/ && exists $opt_ref->{-def}) {
                 $input = $tag;
                 last MENU;
             }
@@ -877,7 +877,7 @@ sub _verify_input_constraints {
 
     # Use default if appropriate (but short-circuit checks if -DEFAULT set)...
     my $input = ${$input_ref};
-    if (${$input_ref} =~ m{^$}xms && exists $opt_ref->{-def}) {
+    if (${$input_ref} =~ m{^\R?$}xms && exists $opt_ref->{-def}) {
         return 1 if $opt_ref->{-def_nocheck};
         $input = $opt_ref->{-def}
     }
@@ -1098,7 +1098,7 @@ sub _current_history_for {
     my ($prefix, $opt_ref) = @_;
 
     my $prefix_len = length($prefix);
-    return q{}, map { /\n$/ ? substr($_,0,-1) : $_ }
+    return q{}, map { /\A (.*?) \R \Z/x ? $1 : $_ }
                grep { substr($_,0,$prefix_len) eq $prefix }
                     @{ $history_cache{$opt_ref->{-history}} };
 }
@@ -1314,8 +1314,11 @@ sub _generate_unbuffered_reader_from {
                 }
 
                 # Handle erasures (including pushbacks if faking)...
-                elsif (!$prev_was_verbatim && $next eq $ctrl{ERASE} && length $input) {
-                    if ($insert_offset) {
+                elsif (!$prev_was_verbatim && $next eq $ctrl{ERASE}) {
+                    if (!length $input) {
+                        # Do nothing...
+                    }
+                    elsif ($insert_offset) {
                         # Can't erase past start of input...
                         next INPUT if $insert_offset >= length($input);
 
@@ -1681,7 +1684,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004009
+This document describes IO::Prompter version 0.004010
 
 
 =head1 SYNOPSIS
