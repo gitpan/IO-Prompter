@@ -5,11 +5,11 @@ use warnings;
 no if $] >= 5.018000, warnings => 'experimental';
 use strict;
 use Carp;
-use Contextual::Return;
+use Contextual::Return qw< PUREBOOL BOOL SCALAR METHOD VOID LIST RETOBJ >;
 use Scalar::Util qw< openhandle looks_like_number >;
 use Symbol       qw< qualify_to_ref >;
 
-our $VERSION = '0.004010';
+our $VERSION = '0.004011';
 
 my $fake_input;     # Flag that we're faking input from the source
 
@@ -35,9 +35,10 @@ my %COMPLETE_MODE = (
         => [split /\s+/, $ENV{IO_PROMPTER_HISTORY_MODES} // q{full}],
 );
 
-my $FAKE_ESC = "\e";
-my $MENU_ESC = "\e";
-my $MENU_MK  = '__M_E_N_U__';
+my $FAKE_ESC    = "\e";
+my $FAKE_INSERT = "\cF";
+my $MENU_ESC    = "\e";
+my $MENU_MK     = '__M_E_N_U__';
 
 my %EDIT = (
     BACK    => qq{\cB},
@@ -969,9 +970,10 @@ sub _generate_buffered_reader_from {
 
     # Set up local faked input, if any...
     my $local_fake_input;
+    my $orig_fake_input;
     if (defined $fake_input && length($fake_input) > 0) {
         $fake_input =~ s{ \A (.*) \R? }{}xm;
-        $local_fake_input = $1;
+        $orig_fake_input = $local_fake_input = $1;
     }
 
     return sub {
@@ -1194,9 +1196,10 @@ sub _generate_unbuffered_reader_from {
 
         # Set up local faked input, if any...
         my $local_fake_input;
+        my $orig_fake_input;
         if (defined $fake_input && length($fake_input) > 0) {
             $fake_input =~ s{ \A (.*) \R? }{}xm;
-            $local_fake_input = $1;
+            $orig_fake_input = $local_fake_input = $1;
         }
 
         my $input = q{};
@@ -1360,6 +1363,16 @@ sub _generate_unbuffered_reader_from {
 
                 # Handle escape from faking...
                 elsif (!$prev_was_verbatim && $faking && $next eq $FAKE_ESC) {
+                    my $lookahead = Term::ReadKey::ReadKey(0, $in_fh);
+
+                    # Two <ESC> implies the current faked line is deferred...
+                    if ($lookahead eq $FAKE_ESC) {
+                        $fake_input =~ s{ \A }{$orig_fake_input\n}xm;
+                    }
+                    # Only one <ESC> implies the current faked line is replaced...
+                    else {
+                        $in_fh->ungetc(ord($lookahead));
+                    }
                     undef $local_fake_input;
                     $faking = 0;
                     next INPUT;
@@ -1584,6 +1597,7 @@ my %synonyms = (
     blink     => [qw<blinking flicker flickering flash flashing>],
     reverse   => [qw<reversed inverse inverted>],
     concealed => [qw<hidden blank invisible>],
+    reset     => [qw<normal default standard usual ordinary regular>],
     bright_   => [qw< bright\s+ vivid\s+ >],
     red       => [qw< scarlet vermilion crimson ruby cherry cerise cardinal carmine
                       burgundy claret chestnut copper garnet geranium russet
@@ -1684,7 +1698,7 @@ IO::Prompter - Prompt for input, read it, clean it, return it.
 
 =head1 VERSION
 
-This document describes IO::Prompter version 0.004010
+This document describes IO::Prompter version 0.004011
 
 
 =head1 SYNOPSIS
@@ -3269,8 +3283,10 @@ for you.
 
 Alternatively, if you hit C<< <ESC> >> at any point, C<prompt()> escapes
 from the simulated input mode for that particular call to C<prompt()>,
-throws away the current line of simulated input, and allows you to
-(temporarily) type text in directly.
+and allows you to (temporarily) type text in directly. If you enter only
+a single C<< <ESC> >>, then C<prompt()> throws away the current line of
+simulated input; if you enter two C<< <ESC> >>'s, the simulated input is
+merely deferred to the next call to C<prompt()>.
 
 All these keyboard behaviours require the Term::ReadKey module to be
 available. If it isn't, C<prompt()> falls back on a simpler simulation,

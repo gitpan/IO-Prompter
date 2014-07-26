@@ -144,3 +144,11 @@ Revision history for IO-Prompter
 
     * Fixed spurious ERASEs when deleting "past" start of input
       (thanks, Gareth)
+
+
+0.004011  Fri Jul 25 17:03:42 2014
+
+    * Added 'normal', 'default', 'standard', etc. to colour translation
+
+    * Added <CTRL-F> at start of faked input to defer next fake and insert real input
+      (i.e. like <ESC> but doesn't throw away the line that was scheduled next)
